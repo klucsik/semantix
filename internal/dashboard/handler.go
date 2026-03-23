@@ -1036,13 +1036,13 @@ const dashboardHTML = `<!DOCTYPE html>
                 .attr('x', -70)
                 .attr('y', -40);
 
-            // Accent bar
+            // Accent bar (shortened to avoid overlapping rounded corners)
             node.append('rect')
                 .attr('class', 'node-accent')
                 .attr('width', 4)
-                .attr('height', 80)
+                .attr('height', 68)
                 .attr('x', -70)
-                .attr('y', -40)
+                .attr('y', -34)
                 .attr('rx', 2);
 
             // Service name
