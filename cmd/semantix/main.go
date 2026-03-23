@@ -14,7 +14,6 @@ import (
 	"github.com/mreider/semantix/internal/config"
 	"github.com/mreider/semantix/internal/dashboard"
 	"github.com/mreider/semantix/internal/simulation"
-	"github.com/mreider/semantix/internal/telemetry"
 )
 
 var (
@@ -103,22 +102,16 @@ func main() {
 		cancel()
 	}()
 
-	// Initialize telemetry exporters for each config
-	// (each config may have different endpoints)
+	// Create simulation engines for each config
+	// Each engine manages its own per-service telemetry providers
 	engines := make([]*simulation.Engine, 0, len(configs))
 	for i, cfg := range configs {
-		// Setup telemetry provider
-		tp, err := telemetry.NewProvider(ctx, cfg)
-		if err != nil {
-			log.Fatalf("Failed to initialize telemetry for config %d: %v", i, err)
-		}
-		defer tp.Shutdown(ctx)
-
-		// Create simulation engine
-		engine, err := simulation.NewEngine(cfg, tp)
+		// Create simulation engine (it creates its own per-service providers)
+		engine, err := simulation.NewEngine(ctx, cfg)
 		if err != nil {
 			log.Fatalf("Failed to create simulation engine for config %d: %v", i, err)
 		}
+		defer engine.Shutdown(ctx)
 		engines = append(engines, engine)
 	}
 

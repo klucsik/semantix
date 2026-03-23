@@ -21,37 +21,39 @@ import (
 
 // Engine runs the telemetry simulation.
 type Engine struct {
-	cfg             *config.Config
-	provider        *telemetry.Provider
-	tracers         map[string]trace.Tracer
-	metrics         *telemetry.Metrics
-	logger          *telemetry.Logger
-	anomalyManager  *AnomalyManager
-	scenarioManager *ScenarioManager
-	rng             *rand.Rand
-	mu              sync.RWMutex
+	cfg              *config.Config
+	factory          *telemetry.ServiceProviderFactory
+	serviceProviders map[string]*telemetry.ServiceProvider // per-service providers
+	logger           *telemetry.Logger
+	anomalyManager   *AnomalyManager
+	scenarioManager  *ScenarioManager
+	rng              *rand.Rand
+	mu               sync.RWMutex
 }
 
 // NewEngine creates a new simulation engine.
-func NewEngine(cfg *config.Config, provider *telemetry.Provider) (*Engine, error) {
+func NewEngine(ctx context.Context, cfg *config.Config) (*Engine, error) {
 	// Initialize random source
 	seed := cfg.Simulation.Seed
 	if seed == 0 {
 		seed = time.Now().UnixNano()
 	}
 
-	// Create tracers for each service
-	tracers := make(map[string]trace.Tracer)
-	for i := range cfg.Services {
-		svc := &cfg.Services[i]
-		tracers[svc.Name] = provider.TracerForService(svc, cfg.GlobalResource)
+	// Create the service provider factory
+	factory, err := telemetry.NewServiceProviderFactory(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service provider factory: %w", err)
 	}
 
-	// Create metrics collector
-	meter := provider.MeterProvider.Meter("github.com/mreider/semantix")
-	metrics, err := telemetry.NewMetrics(meter, &cfg.Metrics)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create metrics: %w", err)
+	// Create a ServiceProvider for each service
+	serviceProviders := make(map[string]*telemetry.ServiceProvider)
+	for i := range cfg.Services {
+		svc := &cfg.Services[i]
+		sp, err := factory.CreateProvider(ctx, svc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create provider for service %s: %w", svc.Name, err)
+		}
+		serviceProviders[svc.Name] = sp
 	}
 
 	// Create logger
@@ -62,15 +64,19 @@ func NewEngine(cfg *config.Config, provider *telemetry.Provider) (*Engine, error
 	scenarioManager := NewScenarioManager(cfg.Scenarios, seed)
 
 	return &Engine{
-		cfg:             cfg,
-		provider:        provider,
-		tracers:         tracers,
-		metrics:         metrics,
-		logger:          logger,
-		anomalyManager:  anomalyManager,
-		scenarioManager: scenarioManager,
-		rng:             rand.New(rand.NewSource(seed)),
+		cfg:              cfg,
+		factory:          factory,
+		serviceProviders: serviceProviders,
+		logger:           logger,
+		anomalyManager:   anomalyManager,
+		scenarioManager:  scenarioManager,
+		rng:              rand.New(rand.NewSource(seed)),
 	}, nil
+}
+
+// Shutdown gracefully shuts down all service providers.
+func (e *Engine) Shutdown(ctx context.Context) error {
+	return e.factory.Shutdown(ctx)
 }
 
 // Run starts the simulation loop.
@@ -167,9 +173,9 @@ func (e *Engine) Run(ctx context.Context) error {
 
 // simulateRequest simulates a single request through the service topology.
 func (e *Engine) simulateRequest(ctx context.Context, svc *config.ServiceConfig, ep *config.EndpointConfig) {
-	tracer := e.tracers[svc.Name]
-	if tracer == nil {
-		log.Printf("No tracer for service %s", svc.Name)
+	sp := e.serviceProviders[svc.Name]
+	if sp == nil {
+		log.Printf("No service provider for service %s", svc.Name)
 		return
 	}
 
@@ -178,7 +184,7 @@ func (e *Engine) simulateRequest(ctx context.Context, svc *config.ServiceConfig,
 
 	// Create root span with appropriate kind
 	spanKind := e.getSpanKind(ep)
-	ctx, span := tracer.Start(ctx, spanName,
+	ctx, span := sp.Tracer().Start(ctx, spanName,
 		trace.WithSpanKind(spanKind),
 	)
 	defer span.End()
@@ -235,18 +241,17 @@ func (e *Engine) simulateRequest(ctx context.Context, svc *config.ServiceConfig,
 		span.SetAttributes(attribute.Int("http.response.status_code", 200))
 	}
 
-	// Record metrics
+	// Record metrics using per-service metrics
 	statusCode := 200
 	if isError && errorType != nil {
 		statusCode = errorType.Code
 	}
 	metricAttrs := []attribute.KeyValue{
-		attribute.String("service.name", svc.Name),
 		attribute.String("http.request.method", ep.Method),
 		attribute.String("http.route", ep.Route),
 		attribute.Int("http.response.status_code", statusCode),
 	}
-	e.metrics.RecordHTTPServerRequest(ctx, latency, metricAttrs...)
+	sp.Metrics().RecordHTTPServerRequest(ctx, latency, metricAttrs...)
 
 	// Generate correlated logs
 	logEntries := e.logger.GenerateLogs(ctx, svc.Name, isError)
@@ -313,9 +318,9 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 		return
 	}
 
-	tracer := e.tracers[targetSvc.Name]
-	if tracer == nil {
-		log.Printf("No tracer for service %s", targetSvc.Name)
+	sp := e.serviceProviders[targetSvc.Name]
+	if sp == nil {
+		log.Printf("No service provider for service %s", targetSvc.Name)
 		return
 	}
 
@@ -340,7 +345,7 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 	}
 
 	spanName := e.generateSpanName(targetSvc, targetEp)
-	ctx, span := tracer.Start(ctx, spanName, opts...)
+	ctx, span := sp.Tracer().Start(ctx, spanName, opts...)
 	defer span.End()
 
 	e.addSpanAttributes(span, targetSvc, targetEp)
@@ -380,26 +385,24 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 		}
 	}
 
-	// Record metrics based on service type
-	metricAttrs := []attribute.KeyValue{
-		attribute.String("service.name", targetSvc.Name),
-	}
+	// Record metrics using per-service metrics (no need for service.name attribute - it's in Resource)
+	metricAttrs := []attribute.KeyValue{}
 	switch targetSvc.Type {
 	case "database":
 		metricAttrs = append(metricAttrs,
 			attribute.String("db.system", targetSvc.System),
 			attribute.String("db.operation", targetEp.Operation),
 		)
-		e.metrics.RecordDBOperation(ctx, latency, metricAttrs...)
+		sp.Metrics().RecordDBOperation(ctx, latency, metricAttrs...)
 	case "messaging":
 		metricAttrs = append(metricAttrs,
 			attribute.String("messaging.system", targetSvc.System),
 			attribute.String("messaging.destination.name", targetEp.Topic),
 		)
 		if targetEp.Type == "messaging.producer" {
-			e.metrics.RecordMessagingPublish(ctx, latency, metricAttrs...)
+			sp.Metrics().RecordMessagingPublish(ctx, latency, metricAttrs...)
 		} else {
-			e.metrics.RecordMessagingReceive(ctx, latency, metricAttrs...)
+			sp.Metrics().RecordMessagingReceive(ctx, latency, metricAttrs...)
 		}
 	default: // HTTP client call
 		statusCode := 200
@@ -411,7 +414,7 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 			attribute.String("server.address", targetSvc.Name),
 			attribute.Int("http.response.status_code", statusCode),
 		)
-		e.metrics.RecordHTTPClientRequest(ctx, latency, metricAttrs...)
+		sp.Metrics().RecordHTTPClientRequest(ctx, latency, metricAttrs...)
 	}
 
 	// Generate correlated logs for this service

@@ -16,7 +16,6 @@ import (
 
 	"github.com/mreider/semantix/internal/config"
 	"github.com/mreider/semantix/internal/simulation"
-	"github.com/mreider/semantix/internal/telemetry"
 )
 
 // TestDynatraceIntegration runs a short simulation and verifies
@@ -55,14 +54,8 @@ func TestDynatraceIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	t.Log("Starting telemetry provider...")
-	tp, err := telemetry.NewProvider(ctx, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create telemetry provider: %v", err)
-	}
-
 	t.Log("Creating simulation engine...")
-	engine, err := simulation.NewEngine(cfg, tp)
+	engine, err := simulation.NewEngine(ctx, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create simulation engine: %v", err)
 	}
@@ -87,12 +80,12 @@ func TestDynatraceIntegration(t *testing.T) {
 		// Expected timeout
 	}
 
-	// Shutdown telemetry provider to flush all data
-	t.Log("Shutting down telemetry provider (flushing data)...")
+	// Shutdown engine to flush all telemetry data
+	t.Log("Shutting down engine (flushing data)...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
-	if err := tp.Shutdown(shutdownCtx); err != nil {
-		t.Logf("Warning: telemetry shutdown error: %v", err)
+	if err := engine.Shutdown(shutdownCtx); err != nil {
+		t.Logf("Warning: engine shutdown error: %v", err)
 	}
 
 	if !canVerifyWithDQL {
@@ -114,7 +107,7 @@ func TestDynatraceIntegration(t *testing.T) {
 	// Test 1: Verify spans exist
 	t.Run("VerifySpans", func(t *testing.T) {
 		// Query for spans from our test service
-		// Note: service.name comes from resource but may show as "unknown_service" 
+		// Note: service.name comes from resource but may show as "unknown_service"
 		// if not properly configured. We use server.address which we control.
 		query := fmt.Sprintf(`fetch spans
 | filter server.address == "%s"
