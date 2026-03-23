@@ -23,6 +23,14 @@ var (
 	buildDate = "unknown"
 )
 
+func getVersion() string {
+	// Environment variable overrides compiled version (set by Cloud Run deploy)
+	if v := os.Getenv("VERSION"); v != "" {
+		return v
+	}
+	return version
+}
+
 func main() {
 	// CLI flags
 	configDir := flag.String("config-dir", "./configs", "Directory containing YAML configuration files")
@@ -43,7 +51,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("Semantix %s\n", version)
+		fmt.Printf("Semantix %s\n", getVersion())
 		fmt.Printf("  Commit: %s\n", commit)
 		fmt.Printf("  Built:  %s\n", buildDate)
 		os.Exit(0)
@@ -133,7 +141,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Register dashboard routes
-	dash := dashboard.New(configs, version)
+	dash := dashboard.New(configs, getVersion())
 	dash.RegisterRoutes(mux)
 
 	server := &http.Server{Addr: ":" + port, Handler: mux}

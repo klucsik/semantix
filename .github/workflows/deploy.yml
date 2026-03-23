@@ -1,7 +1,9 @@
 name: Deploy to Cloud Run
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Integration Tests"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -12,10 +14,19 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Only deploy if the triggering workflow succeeded (or if manually triggered)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0-$(git rev-parse --short HEAD)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -34,7 +45,7 @@ jobs:
             --region ${{ secrets.GCP_REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars "DT_ENDPOINT=${{ secrets.DT_ENDPOINT }}" \
+            --set-env-vars "DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},VERSION=${{ steps.version.outputs.version }}" \
             --set-secrets "DT_API_TOKEN=dynatrace-api-token:latest" \
             --memory 512Mi \
             --cpu 1 \
@@ -48,3 +59,4 @@ jobs:
             --region ${{ secrets.GCP_REGION }} \
             --format 'value(status.url)')
           echo "Service deployed to: $URL"
+          echo "Version: ${{ steps.version.outputs.version }}"

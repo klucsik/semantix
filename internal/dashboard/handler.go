@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/mreider/semantix/internal/config"
 )
@@ -264,7 +265,8 @@ func getServiceType(svc config.ServiceConfig) string {
 
 func (h *Handler) serveDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, dashboardHTML)
+	html := strings.Replace(dashboardHTML, "{{VERSION}}", h.version, 1)
+	fmt.Fprint(w, html)
 }
 
 const dashboardHTML = `<!DOCTYPE html>
@@ -326,18 +328,6 @@ const dashboardHTML = `<!DOCTYPE html>
             gap: 16px;
         }
 
-        .logo-icon {
-            width: 44px;
-            height: 44px;
-            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            box-shadow: 0 4px 20px rgba(0, 180, 216, 0.3);
-        }
-
         .logo-text {
             font-size: 24px;
             font-weight: 700;
@@ -351,6 +341,34 @@ const dashboardHTML = `<!DOCTYPE html>
             font-size: 12px;
             color: var(--text-secondary);
             margin-top: 2px;
+        }
+
+        .header-meta {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .version {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-family: 'SF Mono', Menlo, monospace;
+        }
+
+        .github-link {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 6px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .github-link:hover {
+            color: var(--text-primary);
+            border-color: var(--accent-blue);
+            background: rgba(0, 180, 216, 0.1);
         }
 
         .header-stats {
@@ -835,11 +853,14 @@ const dashboardHTML = `<!DOCTYPE html>
 <body>
     <header class="header">
         <div class="logo">
-            <div class="logo-icon">S</div>
             <div>
                 <div class="logo-text">Semantix</div>
                 <div class="logo-subtitle">OpenTelemetry Simulation Engine</div>
             </div>
+        </div>
+        <div class="header-meta">
+            <span class="version">{{VERSION}}</span>
+            <a href="https://github.com/mreider/semantix" target="_blank" rel="noopener noreferrer" class="github-link">GitHub</a>
         </div>
         <div class="header-stats">
             <div class="header-stat">
@@ -853,10 +874,6 @@ const dashboardHTML = `<!DOCTYPE html>
             <div class="header-stat">
                 <div class="header-stat-value" id="total-links">-</div>
                 <div class="header-stat-label">Connections</div>
-            </div>
-            <div class="header-stat">
-                <div class="header-stat-value pulse" style="color: var(--accent-green);">LIVE</div>
-                <div class="header-stat-label">Status</div>
             </div>
         </div>
     </header>
@@ -890,7 +907,7 @@ const dashboardHTML = `<!DOCTYPE html>
 
         <div class="detail-panel" id="detail-panel">
             <div class="empty-state">
-                <div class="empty-state-icon">🎯</div>
+                <div class="empty-state-icon"></div>
                 <div class="empty-state-title">Select a Service</div>
                 <div class="empty-state-text">Click on any service node to view detailed telemetry information and endpoint configuration.</div>
             </div>
@@ -1120,7 +1137,7 @@ const dashboardHTML = `<!DOCTYPE html>
             const panel = document.getElementById('detail-panel');
             panel.innerHTML = ` + "`" + `
                 <div class="empty-state">
-                    <div class="empty-state-icon">🎯</div>
+                    <div class="empty-state-icon"></div>
                     <div class="empty-state-title">Select a Service</div>
                     <div class="empty-state-text">Click on any service node to view detailed telemetry information and endpoint configuration.</div>
                 </div>
@@ -1224,9 +1241,9 @@ const dashboardHTML = `<!DOCTYPE html>
 
         function getServiceIcon(type) {
             switch (type) {
-                case 'database': return '🗄️';
-                case 'messaging': return '📨';
-                default: return '🌐';
+                case 'database': return 'DB';
+                case 'messaging': return 'MQ';
+                default: return 'API';
             }
         }
 
