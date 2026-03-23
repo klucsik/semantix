@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -122,6 +123,71 @@ func main() {
 		}(engine)
 	}
 
+	// Start HTTP server for health checks and dashboard
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	mux := http.NewServeMux()
+
+	// Health check endpoint
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	// Placeholder dashboard
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head>
+    <title>Semantix Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+               background: #1a1a2e; color: #eee; margin: 0; padding: 40px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #00d4ff; }
+        .status { background: #16213e; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .status-indicator { display: inline-block; width: 12px; height: 12px; 
+                           background: #00ff88; border-radius: 50%%; margin-right: 8px; }
+        .services { display: grid; gap: 10px; margin-top: 20px; }
+        .service { background: #0f3460; padding: 15px; border-radius: 6px; }
+        code { background: #0a0a1a; padding: 2px 6px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Semantix</h1>
+        <p>OpenTelemetry Simulation Engine</p>
+        <div class="status">
+            <span class="status-indicator"></span>
+            <strong>Running</strong> — Emitting telemetry to Dynatrace
+        </div>
+        <div class="services">
+            <div class="service">
+                <strong>Active Simulations:</strong> %d
+            </div>
+            <div class="service">
+                <strong>Version:</strong> <code>%s</code>
+            </div>
+        </div>
+        <p style="margin-top: 40px; color: #666;">Dashboard coming soon...</p>
+    </div>
+</body>
+</html>`, len(engines), version)
+	})
+
+	server := &http.Server{Addr: ":" + port, Handler: mux}
+
+	go func() {
+		log.Printf("HTTP server listening on :%s", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP server error: %v", err)
+		}
+	}()
+
 	// Wait for context cancellation or error
 	select {
 	case <-ctx.Done():
@@ -131,6 +197,9 @@ func main() {
 			log.Fatalf("Simulation error: %v", err)
 		}
 	}
+
+	// Shutdown HTTP server
+	server.Shutdown(context.Background())
 
 	log.Println("Semantix shutdown complete")
 }
