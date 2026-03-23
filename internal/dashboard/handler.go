@@ -993,14 +993,16 @@ const dashboardHTML = `<!DOCTYPE html>
                 .attr('d', 'M 0,-5 L 10,0 L 0,5')
                 .attr('fill', 'var(--accent-orange)');
 
-            // Create zoom behavior
+            // Create zoom behavior (wheel zoom only, no click/dblclick)
             const zoom = d3.zoom()
                 .scaleExtent([0.3, 3])
+                .filter(event => event.type === 'wheel' || event.type === 'touchstart' || event.type === 'touchmove')
                 .on('zoom', (event) => {
                     g.attr('transform', event.transform);
                 });
 
-            svg.call(zoom);
+            svg.call(zoom)
+                .on('dblclick.zoom', null);  // Disable double-click zoom
 
             const g = svg.append('g');
 
@@ -1143,10 +1145,8 @@ const dashboardHTML = `<!DOCTYPE html>
                 .text('!');
 
             // Click handler for nodes
-            let selectedNode = null;
             node.on('click', function(event, d) {
                 event.stopPropagation();
-                event.preventDefault();
                 
                 // Deselect previous
                 d3.selectAll('.node').classed('selected', false);
@@ -1154,23 +1154,12 @@ const dashboardHTML = `<!DOCTYPE html>
                 
                 // Select new
                 d3.select(this).classed('selected', true);
-                selectedNode = d;
                 
                 // Highlight connected links
                 link.classed('highlighted', l => l.source.id === d.id || l.target.id === d.id);
                 link.classed('dimmed', l => l.source.id !== d.id && l.target.id !== d.id);
                 
                 showServiceDetail(d, data);
-            });
-
-            // Click outside to deselect
-            svg.on('click', function(event) {
-                if (event.target === svg.node()) {
-                    d3.selectAll('.node').classed('selected', false);
-                    d3.selectAll('.link').classed('highlighted', false).classed('dimmed', false);
-                    selectedNode = null;
-                    showEmptyState();
-                }
             });
             
             // Center the view initially
@@ -1305,13 +1294,8 @@ const dashboardHTML = `<!DOCTYPE html>
             return (type && type.toUpperCase()) || 'HTTP';
         }
 
-        // Initialize
+        // Initialize once
         init();
-
-        // Handle resize
-        window.addEventListener('resize', () => {
-            init();
-        });
     </script>
 </body>
 </html>
