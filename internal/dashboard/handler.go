@@ -1004,20 +1004,89 @@ const dashboardHTML = `<!DOCTYPE html>
 
             const g = svg.append('g');
 
-            // Create force simulation
-            const simulation = d3.forceSimulation(data.nodes)
-                .force('link', d3.forceLink(data.links).id(d => d.id).distance(200))
-                .force('charge', d3.forceManyBody().strength(-1000))
-                .force('center', d3.forceCenter(width / 2, height / 2))
-                .force('collision', d3.forceCollide().radius(80));
+            // --- Static Layout Algorithm ---
+            // Assign layers based on service type and dependencies
+            const nodeMap = {};
+            data.nodes.forEach(n => { nodeMap[n.id] = n; });
+            
+            // Build incoming edges map
+            const incomingEdges = {};
+            const outgoingEdges = {};
+            data.nodes.forEach(n => { 
+                incomingEdges[n.id] = []; 
+                outgoingEdges[n.id] = [];
+            });
+            data.links.forEach(l => {
+                const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+                const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+                incomingEdges[targetId].push(sourceId);
+                outgoingEdges[sourceId].push(targetId);
+            });
+            
+            // Categorize services into layers
+            const layers = { 0: [], 1: [], 2: [], 3: [] };
+            data.nodes.forEach(n => {
+                if (n.type === 'database') {
+                    layers[3].push(n);
+                } else if (n.type === 'messaging') {
+                    layers[2].push(n);
+                } else if (incomingEdges[n.id].length === 0) {
+                    // Entry points (no incoming edges)
+                    layers[0].push(n);
+                } else {
+                    layers[1].push(n);
+                }
+            });
+            
+            // Calculate positions
+            const nodeWidth = 160;
+            const nodeHeight = 90;
+            const layerGap = 140;
+            const nodeGap = 30;
+            const padding = 80;
+            
+            // Position each layer
+            let currentY = padding;
+            for (let layer = 0; layer <= 3; layer++) {
+                const nodesInLayer = layers[layer];
+                if (nodesInLayer.length === 0) continue;
+                
+                const totalWidth = nodesInLayer.length * nodeWidth + (nodesInLayer.length - 1) * nodeGap;
+                let startX = (width - totalWidth) / 2;
+                
+                nodesInLayer.forEach((n, i) => {
+                    n.x = startX + i * (nodeWidth + nodeGap) + nodeWidth / 2;
+                    n.y = currentY + nodeHeight / 2;
+                });
+                
+                currentY += nodeHeight + layerGap;
+            }
 
-            // Create links
+            // Create link data with resolved source/target
+            const linkData = data.links.map(l => ({
+                source: nodeMap[typeof l.source === 'object' ? l.source.id : l.source],
+                target: nodeMap[typeof l.target === 'object' ? l.target.id : l.target],
+                type: l.type,
+                endpoint: l.endpoint,
+                rpm: l.rpm
+            }));
+
+            // Create links (curved paths)
             const link = g.append('g')
-                .selectAll('line')
-                .data(data.links)
-                .join('line')
+                .selectAll('path')
+                .data(linkData)
+                .join('path')
                 .attr('class', d => 'link ' + d.type)
-                .attr('marker-end', d => 'url(#arrowhead-' + d.type + ')');
+                .attr('marker-end', d => 'url(#arrowhead-' + d.type + ')')
+                .attr('d', d => {
+                    const sx = d.source.x;
+                    const sy = d.source.y;
+                    const tx = d.target.x;
+                    const ty = d.target.y;
+                    // Curved path
+                    const midY = (sy + ty) / 2;
+                    return 'M ' + sx + ' ' + sy + ' C ' + sx + ' ' + midY + ', ' + tx + ' ' + midY + ', ' + tx + ' ' + ty;
+                });
 
             // Create nodes
             const node = g.append('g')
@@ -1025,10 +1094,7 @@ const dashboardHTML = `<!DOCTYPE html>
                 .data(data.nodes)
                 .join('g')
                 .attr('class', d => 'node ' + d.type)
-                .call(d3.drag()
-                    .on('start', dragstarted)
-                    .on('drag', dragged)
-                    .on('end', dragended));
+                .attr('transform', d => 'translate(' + d.x + ',' + d.y + ')');
 
             // Node background
             node.append('rect')
@@ -1074,12 +1140,13 @@ const dashboardHTML = `<!DOCTYPE html>
                 .attr('class', 'node-anomaly')
                 .attr('x', 50)
                 .attr('y', -25)
-                .text('⚠');
+                .text('!');
 
-            // Click handler
+            // Click handler for nodes
             let selectedNode = null;
             node.on('click', function(event, d) {
                 event.stopPropagation();
+                event.preventDefault();
                 
                 // Deselect previous
                 d3.selectAll('.node').classed('selected', false);
@@ -1097,40 +1164,25 @@ const dashboardHTML = `<!DOCTYPE html>
             });
 
             // Click outside to deselect
-            svg.on('click', () => {
-                d3.selectAll('.node').classed('selected', false);
-                d3.selectAll('.link').classed('highlighted', false).classed('dimmed', false);
-                selectedNode = null;
-                showEmptyState();
+            svg.on('click', function(event) {
+                if (event.target === svg.node()) {
+                    d3.selectAll('.node').classed('selected', false);
+                    d3.selectAll('.link').classed('highlighted', false).classed('dimmed', false);
+                    selectedNode = null;
+                    showEmptyState();
+                }
             });
-
-            // Simulation tick
-            simulation.on('tick', () => {
-                link
-                    .attr('x1', d => d.source.x)
-                    .attr('y1', d => d.source.y)
-                    .attr('x2', d => d.target.x)
-                    .attr('y2', d => d.target.y);
-
-                node.attr('transform', d => 'translate(' + d.x + ',' + d.y + ')');
-            });
-
-            function dragstarted(event) {
-                if (!event.active) simulation.alphaTarget(0.3).restart();
-                event.subject.fx = event.subject.x;
-                event.subject.fy = event.subject.y;
-            }
-
-            function dragged(event) {
-                event.subject.fx = event.x;
-                event.subject.fy = event.y;
-            }
-
-            function dragended(event) {
-                if (!event.active) simulation.alphaTarget(0);
-                event.subject.fx = null;
-                event.subject.fy = null;
-            }
+            
+            // Center the view initially
+            const bounds = g.node().getBBox();
+            const scale = Math.min(
+                (width - 40) / bounds.width,
+                (height - 40) / bounds.height,
+                1
+            );
+            const translateX = (width - bounds.width * scale) / 2 - bounds.x * scale;
+            const translateY = (height - bounds.height * scale) / 2 - bounds.y * scale;
+            svg.call(zoom.transform, d3.zoomIdentity.translate(translateX, translateY).scale(scale));
         }
 
         function showEmptyState() {
