@@ -943,7 +943,6 @@ const dashboardHTML = `<!DOCTYPE html>
             const width = container.clientWidth;
             const height = container.clientHeight;
             console.log('Container dimensions:', width, height);
-            const height = container.clientHeight;
 
             svg.attr('width', width).attr('height', height);
 
