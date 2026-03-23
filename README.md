@@ -164,7 +164,38 @@ See [configs/examples/ecommerce.yaml](configs/examples/ecommerce.yaml) for a com
 
 ## Deployment
 
-### Docker
+### Local (no Docker)
+
+```bash
+# Build
+go build -o semantix ./cmd/semantix
+
+# Run
+export DT_ENDPOINT="https://xxx.live.dynatrace.com/api/v2/otlp"
+export DT_API_TOKEN="dt0c01.xxx"
+./semantix --config configs/examples/ecommerce.yaml
+```
+
+### Google Cloud Run (recommended)
+
+```bash
+# Deploy directly from source (no local Docker needed)
+gcloud run deploy semantix \
+  --source . \
+  --region us-central1 \
+  --set-env-vars "DT_ENDPOINT=https://xxx.live.dynatrace.com/api/v2/otlp" \
+  --set-secrets "DT_API_TOKEN=dynatrace-api-token:latest" \
+  --memory 256Mi \
+  --cpu 1 \
+  --min-instances 1 \
+  --max-instances 1
+
+# Or use Cloud Build explicitly
+gcloud builds submit --config cloudbuild.yaml \
+  --substitutions=_DT_ENDPOINT="https://xxx.live.dynatrace.com/api/v2/otlp"
+```
+
+### Docker (optional)
 
 ```bash
 # Build
@@ -176,40 +207,6 @@ docker run -d \
   -e DT_API_TOKEN="dt0c01.xxx" \
   -v $(pwd)/configs:/configs \
   semantix --config-dir /configs
-```
-
-### Docker Compose
-
-```bash
-# Set environment variables
-export DT_ENDPOINT="https://xxx.live.dynatrace.com/api/v2/otlp"
-export DT_API_TOKEN="dt0c01.xxx"
-
-# Run
-docker-compose up -d
-```
-
-### Google Cloud Run
-
-```bash
-# Build and push container
-docker build -t gcr.io/PROJECT/semantix:latest .
-docker push gcr.io/PROJECT/semantix:latest
-
-# Deploy to Cloud Run
-gcloud run deploy semantix \
-  --image gcr.io/PROJECT/semantix:latest \
-  --set-env-vars "DT_ENDPOINT=https://xxx.live.dynatrace.com/api/v2/otlp" \
-  --set-secrets "DT_API_TOKEN=dynatrace-api-token:latest" \
-  --memory 256Mi \
-  --cpu 1 \
-  --min-instances 1 \
-  --max-instances 1 \
-  --region us-central1
-
-# Or use Cloud Build
-gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_DT_ENDPOINT="https://xxx.live.dynatrace.com/api/v2/otlp"
 ```
 
 ## CLI Options

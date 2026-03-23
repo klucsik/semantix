@@ -56,3 +56,6 @@ go.work
 
 # Debug
 __debug_bin*
+
+# Session context (temporary)
+.session-context.md
