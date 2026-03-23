@@ -275,6 +275,7 @@ const dashboardHTML = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Semantix - Telemetry Simulation Dashboard</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔭</text></svg>">
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
         :root {
