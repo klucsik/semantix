@@ -421,11 +421,6 @@ const dashboardHTML = `<!DOCTYPE html>
         /* Service Nodes */
         .node {
             cursor: pointer;
-            transition: transform 0.2s ease;
-        }
-
-        .node:hover {
-            transform: scale(1.05);
         }
 
         .node-bg {
@@ -994,17 +989,6 @@ const dashboardHTML = `<!DOCTYPE html>
                 .attr('d', 'M 0,-5 L 10,0 L 0,5')
                 .attr('fill', 'var(--accent-orange)');
 
-            // Create zoom behavior (wheel zoom only, no click/dblclick)
-            const zoom = d3.zoom()
-                .scaleExtent([0.3, 3])
-                .filter(event => event.type === 'wheel' || event.type === 'touchstart' || event.type === 'touchmove')
-                .on('zoom', (event) => {
-                    g.attr('transform', event.transform);
-                });
-
-            svg.call(zoom)
-                .on('dblclick.zoom', null);  // Disable double-click zoom
-
             const g = svg.append('g');
 
             // --- Static Layout Algorithm ---
@@ -1163,7 +1147,7 @@ const dashboardHTML = `<!DOCTYPE html>
                 showServiceDetail(d, data);
             });
             
-            // Center the view initially
+            // Center the diagram
             const bounds = g.node().getBBox();
             const scale = Math.min(
                 (width - 40) / bounds.width,
@@ -1172,7 +1156,7 @@ const dashboardHTML = `<!DOCTYPE html>
             );
             const translateX = (width - bounds.width * scale) / 2 - bounds.x * scale;
             const translateY = (height - bounds.height * scale) / 2 - bounds.y * scale;
-            svg.call(zoom.transform, d3.zoomIdentity.translate(translateX, translateY).scale(scale));
+            g.attr('transform', 'translate(' + translateX + ',' + translateY + ') scale(' + scale + ')');
         }
 
         function showEmptyState() {
