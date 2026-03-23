@@ -1,6 +1,6 @@
 # Semantix E-commerce Example
-# This configuration simulates a Fabrik-like e-commerce application
-# with microservices, Kafka messaging, and PostgreSQL database.
+# Simulates "ShopFlow" - a realistic e-commerce platform with
+# microservices, Kafka messaging, and PostgreSQL database.
 
 version: "1.0"
 
@@ -18,15 +18,20 @@ global_resource_attributes:
   deployment.environment: "production"
   cloud.provider: "gcp"
   cloud.region: "us-central1"
-  service.namespace: "ecommerce"
+  service.namespace: "shopflow"
 
 services:
-  # Frontend - Web gateway handling checkout requests
+  # ============================================================
+  # HTTP SERVICES
+  # ============================================================
+
+  # Frontend Gateway - Main entry point for web/mobile
+  # Aggregates multiple downstream calls, so latencies are higher
   - name: "frontend"
     version: "2.1.0"
     resource_attributes:
       k8s.deployment.name: "frontend"
-      k8s.namespace.name: "ecommerce"
+      k8s.namespace.name: "shopflow"
     endpoints:
       - name: "checkout"
         type: "http.server"
@@ -37,10 +42,11 @@ services:
           burst_probability: 0.1
           burst_multiplier: 3
         latency:
+          # Checkout is complex - wide tail due to payment processing
           distribution: "log_normal"
-          p50_ms: 45
-          p95_ms: 180
-          p99_ms: 450
+          p50_ms: 120
+          p95_ms: 850
+          p99_ms: 2500
         errors:
           rate: 0.02
           types:
@@ -53,43 +59,272 @@ services:
               exception: "java.net.ConnectException"
               weight: 0.3
         calls:
+          - service: "user-service"
+            endpoint: "get_user"
+          - service: "cart-service"
+            endpoint: "get_cart"
           - service: "orders"
             endpoint: "create_order"
           - service: "inventory"
-            endpoint: "check_stock"
+            endpoint: "reserve_stock"
             parallel: true
 
-      - name: "get_dashboard"
+      - name: "browse_products"
         type: "http.server"
         method: "GET"
-        route: "/api/v1/dashboard"
+        route: "/api/v1/products"
         traffic:
-          requests_per_minute: 120
+          requests_per_minute: 200
           burst_probability: 0.05
           burst_multiplier: 2
         latency:
+          # Search can be slow due to full-text search
+          distribution: "log_normal"
+          p50_ms: 65
+          p95_ms: 280
+          p99_ms: 600
+        calls:
+          - service: "product-catalog"
+            endpoint: "search_products"
+          - service: "recommendation-service"
+            endpoint: "get_recommendations"
+            parallel: true
+
+      - name: "view_product"
+        type: "http.server"
+        method: "GET"
+        route: "/api/v1/products/{id}"
+        traffic:
+          requests_per_minute: 150
+        latency:
+          # Single product lookup - fast, tight distribution (cached)
+          distribution: "normal"
+          p50_ms: 18
+          p95_ms: 45
+          p99_ms: 85
+        calls:
+          - service: "product-catalog"
+            endpoint: "get_product"
+          - service: "inventory"
+            endpoint: "check_stock"
+          - service: "postgres"
+            endpoint: "select_product_reviews"
+            parallel: true
+
+      - name: "add_to_cart"
+        type: "http.server"
+        method: "POST"
+        route: "/api/v1/cart/items"
+        traffic:
+          requests_per_minute: 80
+        latency:
+          # Simple write - moderately fast
           distribution: "normal"
           p50_ms: 25
-          p95_ms: 80
+          p95_ms: 65
+          p99_ms: 120
+        calls:
+          - service: "cart-service"
+            endpoint: "add_item"
+
+      - name: "health_check"
+        type: "http.server"
+        method: "GET"
+        route: "/health"
+        traffic:
+          requests_per_minute: 30
+        latency:
+          # Ultra-fast health check
+          distribution: "normal"
+          p50_ms: 2
+          p95_ms: 5
+          p99_ms: 10
+
+  # User Service - Manages customer accounts
+  # Heavily cached service - very fast reads
+  - name: "user-service"
+    version: "1.8.0"
+    resource_attributes:
+      k8s.deployment.name: "user-service"
+      k8s.namespace.name: "shopflow"
+    endpoints:
+      - name: "get_user"
+        type: "http.server"
+        method: "GET"
+        route: "/api/users/{id}"
+        latency:
+          # Cached user lookup - extremely fast, tight distribution
+          distribution: "normal"
+          p50_ms: 5
+          p95_ms: 12
+          p99_ms: 25
         calls:
           - service: "postgres"
-            endpoint: "select_orders"
+            endpoint: "select_customer_by_id"
 
-  # Orders Service - Creates orders and publishes to Kafka
+      - name: "update_preferences"
+        type: "http.server"
+        method: "PUT"
+        route: "/api/users/{id}/preferences"
+        latency:
+          # Write operation - slightly slower
+          distribution: "normal"
+          p50_ms: 15
+          p95_ms: 45
+          p99_ms: 90
+        calls:
+          - service: "postgres"
+            endpoint: "update_customer_preferences"
+          - service: "kafka"
+            endpoint: "publish_customer_updated"
+            async: true
+
+      - name: "authenticate"
+        type: "http.server"
+        method: "POST"
+        route: "/api/auth/login"
+        traffic:
+          requests_per_minute: 40
+        latency:
+          # Auth includes password hashing - CPU bound, wider tail
+          distribution: "log_normal"
+          p50_ms: 45
+          p95_ms: 120
+          p99_ms: 250
+        errors:
+          rate: 0.05
+          types:
+            - code: 401
+              message: "Invalid credentials"
+              weight: 0.9
+            - code: 429
+              message: "Too many attempts"
+              weight: 0.1
+
+  # Product Catalog Service
+  # Search is slow, single lookups are cached
+  - name: "product-catalog"
+    version: "2.0.1"
+    resource_attributes:
+      k8s.deployment.name: "product-catalog"
+      k8s.namespace.name: "shopflow"
+    endpoints:
+      - name: "search_products"
+        type: "http.server"
+        method: "GET"
+        route: "/api/products/search"
+        latency:
+          # Full-text search - variable, can be slow with complex queries
+          distribution: "log_normal"
+          p50_ms: 85
+          p95_ms: 350
+          p99_ms: 900
+        errors:
+          rate: 0.005
+          types:
+            - code: 504
+              message: "Search timeout"
+              weight: 1.0
+        calls:
+          - service: "postgres"
+            endpoint: "search_products_fulltext"
+
+      - name: "get_product"
+        type: "http.server"
+        method: "GET"
+        route: "/api/products/{id}"
+        latency:
+          # Cached single product - very fast
+          distribution: "normal"
+          p50_ms: 4
+          p95_ms: 12
+          p99_ms: 25
+        calls:
+          - service: "postgres"
+            endpoint: "select_product_by_sku"
+
+      - name: "list_categories"
+        type: "http.server"
+        method: "GET"
+        route: "/api/categories"
+        traffic:
+          requests_per_minute: 100
+        latency:
+          # Static data - ultra fast, from memory
+          distribution: "normal"
+          p50_ms: 2
+          p95_ms: 6
+          p99_ms: 12
+
+  # Cart Service - Shopping cart management
+  # Redis-backed, very fast
+  - name: "cart-service"
+    version: "1.4.2"
+    resource_attributes:
+      k8s.deployment.name: "cart-service"
+      k8s.namespace.name: "shopflow"
+    endpoints:
+      - name: "get_cart"
+        type: "http.server"
+        method: "GET"
+        route: "/api/carts/{user_id}"
+        latency:
+          # Redis-backed - very fast, tight distribution
+          distribution: "normal"
+          p50_ms: 8
+          p95_ms: 20
+          p99_ms: 40
+        calls:
+          - service: "postgres"
+            endpoint: "select_cart_items"
+
+      - name: "add_item"
+        type: "http.server"
+        method: "POST"
+        route: "/api/carts/{user_id}/items"
+        latency:
+          # Write to Redis + async DB persist
+          distribution: "normal"
+          p50_ms: 12
+          p95_ms: 30
+          p99_ms: 55
+        calls:
+          - service: "postgres"
+            endpoint: "upsert_cart_item"
+          - service: "kafka"
+            endpoint: "publish_cart_updated"
+            async: true
+
+      - name: "remove_item"
+        type: "http.server"
+        method: "DELETE"
+        route: "/api/carts/{user_id}/items/{item_id}"
+        traffic:
+          requests_per_minute: 30
+        latency:
+          distribution: "normal"
+          p50_ms: 10
+          p95_ms: 25
+          p99_ms: 45
+
+  # Orders Service - Order management
+  # Critical path - needs to be reliable
   - name: "orders"
     version: "1.5.2"
     resource_attributes:
       k8s.deployment.name: "orders"
-      k8s.namespace.name: "ecommerce"
+      k8s.namespace.name: "shopflow"
     endpoints:
       - name: "create_order"
         type: "http.server"
         method: "POST"
         route: "/api/orders"
         latency:
-          distribution: "normal"
-          p50_ms: 30
-          p95_ms: 80
+          # Multiple DB writes + payment - variable latency
+          distribution: "log_normal"
+          p50_ms: 180
+          p95_ms: 650
+          p99_ms: 1800
         errors:
           rate: 0.01
           types:
@@ -103,139 +338,592 @@ services:
         calls:
           - service: "postgres"
             endpoint: "insert_order"
+          - service: "postgres"
+            endpoint: "insert_order_items"
+          - service: "payment-service"
+            endpoint: "process_payment"
           - service: "kafka"
-            endpoint: "publish_order"
-            type: "messaging"
+            endpoint: "publish_order_created"
             async: true
 
-  # Inventory Service - Manages stock levels
+      - name: "get_order"
+        type: "http.server"
+        method: "GET"
+        route: "/api/orders/{id}"
+        latency:
+          # Single read - fast
+          distribution: "normal"
+          p50_ms: 12
+          p95_ms: 35
+          p99_ms: 70
+        calls:
+          - service: "postgres"
+            endpoint: "select_order_with_items"
+
+      - name: "list_orders"
+        type: "http.server"
+        method: "GET"
+        route: "/api/orders"
+        traffic:
+          requests_per_minute: 40
+        latency:
+          # Paginated list with joins - moderate
+          distribution: "log_normal"
+          p50_ms: 45
+          p95_ms: 150
+          p99_ms: 350
+        calls:
+          - service: "postgres"
+            endpoint: "select_orders_paginated"
+
+      - name: "cancel_order"
+        type: "http.server"
+        method: "POST"
+        route: "/api/orders/{id}/cancel"
+        traffic:
+          requests_per_minute: 5
+        latency:
+          # Cancellation with refund - slow due to payment gateway
+          distribution: "log_normal"
+          p50_ms: 250
+          p95_ms: 900
+          p99_ms: 2500
+        errors:
+          rate: 0.03
+          types:
+            - code: 409
+              message: "Order cannot be cancelled - already shipped"
+              weight: 0.8
+            - code: 500
+              message: "Refund processing failed"
+              weight: 0.2
+        calls:
+          - service: "payment-service"
+            endpoint: "process_refund"
+
+  # Payment Service - Payment processing
+  # External gateway calls - highly variable latency
+  - name: "payment-service"
+    version: "1.2.0"
+    resource_attributes:
+      k8s.deployment.name: "payment-service"
+      k8s.namespace.name: "shopflow"
+    endpoints:
+      - name: "process_payment"
+        type: "http.server"
+        method: "POST"
+        route: "/api/payments"
+        latency:
+          # External payment gateway - slow with huge variance
+          distribution: "log_normal"
+          p50_ms: 350
+          p95_ms: 1500
+          p99_ms: 4500
+        errors:
+          rate: 0.03
+          types:
+            - code: 402
+              message: "Payment declined"
+              weight: 0.6
+            - code: 500
+              message: "Payment gateway timeout"
+              exception: "java.net.SocketTimeoutException"
+              weight: 0.4
+        calls:
+          - service: "postgres"
+            endpoint: "insert_payment_transaction"
+          - service: "kafka"
+            endpoint: "publish_payment_processed"
+            async: true
+
+      - name: "process_refund"
+        type: "http.server"
+        method: "POST"
+        route: "/api/payments/{id}/refund"
+        latency:
+          # Refunds take even longer - more verification
+          distribution: "log_normal"
+          p50_ms: 500
+          p95_ms: 2000
+          p99_ms: 6000
+        errors:
+          rate: 0.05
+          types:
+            - code: 400
+              message: "Invalid refund amount"
+              weight: 0.3
+            - code: 500
+              message: "Refund processing failed"
+              exception: "com.shopflow.PaymentException"
+              weight: 0.7
+        calls:
+          - service: "postgres"
+            endpoint: "insert_refund_transaction"
+          - service: "kafka"
+            endpoint: "publish_refund_processed"
+            async: true
+
+      - name: "get_payment_status"
+        type: "http.server"
+        method: "GET"
+        route: "/api/payments/{id}"
+        traffic:
+          requests_per_minute: 20
+        latency:
+          # Status check - just DB read
+          distribution: "normal"
+          p50_ms: 8
+          p95_ms: 25
+          p99_ms: 50
+
+  # Inventory Service - Stock management
+  # Mix of cached reads and locked writes
   - name: "inventory"
     version: "1.3.0"
     resource_attributes:
       k8s.deployment.name: "inventory"
-      k8s.namespace.name: "ecommerce"
+      k8s.namespace.name: "shopflow"
     endpoints:
       - name: "check_stock"
         type: "http.server"
         method: "GET"
-        route: "/api/inventory/check"
+        route: "/api/inventory/{sku}"
         latency:
+          # Cached stock check - very fast
           distribution: "normal"
-          p50_ms: 15
-          p95_ms: 50
+          p50_ms: 6
+          p95_ms: 18
+          p99_ms: 35
         calls:
           - service: "postgres"
-            endpoint: "select_inventory"
+            endpoint: "select_inventory_by_sku"
 
       - name: "reserve_stock"
         type: "http.server"
         method: "POST"
         route: "/api/inventory/reserve"
         latency:
-          distribution: "normal"
-          p50_ms: 20
-          p95_ms: 60
+          # Locked write - moderate with contention tail
+          distribution: "log_normal"
+          p50_ms: 35
+          p95_ms: 150
+          p99_ms: 400
+        errors:
+          rate: 0.02
+          types:
+            - code: 409
+              message: "Insufficient stock"
+              weight: 1.0
         calls:
           - service: "postgres"
-            endpoint: "update_inventory"
+            endpoint: "update_inventory_reserved"
+          - service: "kafka"
+            endpoint: "publish_inventory_reserved"
+            async: true
 
-  # Fulfillment Service - Processes orders from Kafka
+      - name: "bulk_update"
+        type: "http.server"
+        method: "POST"
+        route: "/api/inventory/bulk"
+        traffic:
+          requests_per_minute: 2
+        latency:
+          # Bulk operation - slow, batch processing
+          distribution: "log_normal"
+          p50_ms: 800
+          p95_ms: 3000
+          p99_ms: 8000
+        errors:
+          rate: 0.01
+          types:
+            - code: 500
+              message: "Bulk update partially failed"
+              weight: 1.0
+
+  # Recommendation Service
+  # ML model inference - CPU intensive, variable latency
+  - name: "recommendation-service"
+    version: "1.0.3"
+    resource_attributes:
+      k8s.deployment.name: "recommendation-service"
+      k8s.namespace.name: "shopflow"
+    endpoints:
+      - name: "get_recommendations"
+        type: "http.server"
+        method: "GET"
+        route: "/api/recommendations/{user_id}"
+        latency:
+          # ML inference + DB lookups - highly variable
+          distribution: "log_normal"
+          p50_ms: 120
+          p95_ms: 450
+          p99_ms: 1200
+        errors:
+          rate: 0.01
+          types:
+            - code: 503
+              message: "Model inference timeout"
+              weight: 1.0
+        calls:
+          - service: "postgres"
+            endpoint: "select_user_purchase_history"
+          - service: "postgres"
+            endpoint: "select_trending_products"
+
+      - name: "get_similar_products"
+        type: "http.server"
+        method: "GET"
+        route: "/api/recommendations/similar/{product_id}"
+        traffic:
+          requests_per_minute: 80
+        latency:
+          # Pre-computed similarities - faster than personalized
+          distribution: "normal"
+          p50_ms: 25
+          p95_ms: 70
+          p99_ms: 150
+        calls:
+          - service: "postgres"
+            endpoint: "select_product_similarities"
+
+  # Notification Service - Sends emails, SMS, push notifications
+  # Async processing - tolerates higher latency
+  - name: "notification-service"
+    version: "1.1.0"
+    resource_attributes:
+      k8s.deployment.name: "notification-service"
+      k8s.namespace.name: "shopflow"
+    endpoints:
+      - name: "send_order_confirmation"
+        type: "messaging.consumer"
+        topic: "order-events"
+        latency:
+          # External email service call
+          distribution: "log_normal"
+          p50_ms: 180
+          p95_ms: 600
+          p99_ms: 1500
+        errors:
+          rate: 0.01
+          types:
+            - code: 500
+              message: "Email delivery failed"
+              weight: 1.0
+        calls:
+          - service: "postgres"
+            endpoint: "insert_notification_log"
+
+      - name: "send_shipping_update"
+        type: "messaging.consumer"
+        topic: "shipment-events"
+        latency:
+          # SMS gateway - even more variable
+          distribution: "log_normal"
+          p50_ms: 220
+          p95_ms: 800
+          p99_ms: 2000
+        calls:
+          - service: "postgres"
+            endpoint: "insert_notification_log"
+
+      - name: "send_push_notification"
+        type: "messaging.consumer"
+        topic: "customer-events"
+        latency:
+          # Push notification - faster than email/SMS
+          distribution: "normal"
+          p50_ms: 45
+          p95_ms: 120
+          p99_ms: 250
+        errors:
+          rate: 0.02
+          types:
+            - code: 410
+              message: "Device token expired"
+              weight: 1.0
+
+  # Fulfillment Service - Order fulfillment
+  # Complex workflow - high latency variance
   - name: "fulfillment"
     version: "1.2.0"
     resource_attributes:
       k8s.deployment.name: "fulfillment"
-      k8s.namespace.name: "ecommerce"
+      k8s.namespace.name: "shopflow"
     endpoints:
       - name: "process_order"
         type: "messaging.consumer"
-        topic: "orders"
+        topic: "order-events"
         latency:
+          # Complex fulfillment workflow - very wide distribution
           distribution: "log_normal"
-          p50_ms: 200
-          p95_ms: 800
-          p99_ms: 2000
+          p50_ms: 450
+          p95_ms: 2000
+          p99_ms: 6000
         errors:
           rate: 0.03
           types:
             - code: 500
               message: "Fraud check failed"
-              exception: "com.ecommerce.FraudDetectionException"
+              exception: "com.shopflow.FraudDetectionException"
               weight: 0.4
             - code: 500
-              message: "Order validation failed"
+              message: "Address validation failed"
               weight: 0.6
         calls:
           - service: "postgres"
             endpoint: "update_order_status"
+          - service: "postgres"
+            endpoint: "select_warehouse_inventory"
+          - service: "kafka"
+            endpoint: "publish_fulfillment_started"
+            async: true
         anomalies:
           - type: "latency_spike"
             probability: 0.05
             multiplier: 5
             duration: "5m"
-          - type: "error_burst"
-            probability: 0.01
-            error_rate: 0.5
-            duration: "2m"
 
-  # Shipping Receiver - Consumes from Kafka, calls Shipping Processor
-  - name: "shipping-receiver"
-    version: "1.1.0"
-    resource_attributes:
-      k8s.deployment.name: "shipping-receiver"
-      k8s.namespace.name: "ecommerce"
-    endpoints:
-      - name: "receive_shipment"
-        type: "messaging.consumer"
-        topic: "orders"
-        latency:
-          distribution: "normal"
-          p50_ms: 50
-          p95_ms: 150
-        calls:
-          - service: "shipping-processor"
-            endpoint: "create_shipment"
-
-  # Shipping Processor - Creates shipments
-  - name: "shipping-processor"
-    version: "1.0.5"
-    resource_attributes:
-      k8s.deployment.name: "shipping-processor"
-      k8s.namespace.name: "ecommerce"
-    endpoints:
-      - name: "create_shipment"
+      - name: "validate_address"
         type: "http.server"
         method: "POST"
-        route: "/api/shipments"
+        route: "/api/fulfillment/validate-address"
+        traffic:
+          requests_per_minute: 15
         latency:
-          distribution: "normal"
-          p50_ms: 40
-          p95_ms: 120
+          # External address validation API
+          distribution: "log_normal"
+          p50_ms: 150
+          p95_ms: 500
+          p99_ms: 1200
+        errors:
+          rate: 0.02
+          types:
+            - code: 400
+              message: "Invalid address"
+              weight: 0.7
+            - code: 503
+              message: "Address service unavailable"
+              weight: 0.3
+
+  # Shipping Service - Shipment processing
+  # Integrates with carrier APIs - variable external latency
+  - name: "shipping"
+    version: "1.1.0"
+    resource_attributes:
+      k8s.deployment.name: "shipping"
+      k8s.namespace.name: "shopflow"
+    endpoints:
+      - name: "create_shipment"
+        type: "messaging.consumer"
+        topic: "fulfillment-events"
+        latency:
+          # Carrier API integration - highly variable
+          distribution: "log_normal"
+          p50_ms: 280
+          p95_ms: 1200
+          p99_ms: 3500
         errors:
           rate: 0.02
           types:
             - code: 503
-              message: "Shipping provider unavailable"
+              message: "Carrier API unavailable"
               weight: 1.0
         calls:
           - service: "postgres"
             endpoint: "insert_shipment"
+          - service: "postgres"
+            endpoint: "select_shipping_rates"
+          - service: "kafka"
+            endpoint: "publish_shipment_created"
+            async: true
 
-  # PostgreSQL Database
+      - name: "get_rates"
+        type: "http.server"
+        method: "POST"
+        route: "/api/shipping/rates"
+        traffic:
+          requests_per_minute: 50
+        latency:
+          # Multiple carrier API calls - slow
+          distribution: "log_normal"
+          p50_ms: 400
+          p95_ms: 1500
+          p99_ms: 4000
+        errors:
+          rate: 0.03
+          types:
+            - code: 503
+              message: "Rate lookup timeout"
+              weight: 1.0
+        calls:
+          - service: "postgres"
+            endpoint: "select_shipping_rates"
+
+      - name: "track_shipment"
+        type: "http.server"
+        method: "GET"
+        route: "/api/shipping/track/{tracking_number}"
+        traffic:
+          requests_per_minute: 100
+        latency:
+          # Cached tracking info - fast
+          distribution: "normal"
+          p50_ms: 35
+          p95_ms: 100
+          p99_ms: 200
+
+  # Analytics Collector - Collects events for analytics
+  # High throughput, low latency fire-and-forget
+  - name: "analytics-collector"
+    version: "1.0.0"
+    resource_attributes:
+      k8s.deployment.name: "analytics-collector"
+      k8s.namespace.name: "shopflow"
+    endpoints:
+      - name: "collect_cart_events"
+        type: "messaging.consumer"
+        topic: "cart-events"
+        latency:
+          # Batch insert - very fast
+          distribution: "normal"
+          p50_ms: 8
+          p95_ms: 25
+          p99_ms: 50
+        calls:
+          - service: "postgres"
+            endpoint: "insert_analytics_event"
+
+      - name: "collect_order_events"
+        type: "messaging.consumer"
+        topic: "order-events"
+        latency:
+          # Aggregate calculation - slightly slower
+          distribution: "normal"
+          p50_ms: 15
+          p95_ms: 45
+          p99_ms: 90
+        calls:
+          - service: "postgres"
+            endpoint: "insert_analytics_event"
+          - service: "postgres"
+            endpoint: "update_daily_sales_aggregate"
+
+      - name: "collect_page_views"
+        type: "messaging.consumer"
+        topic: "pageview-events"
+        latency:
+          # Ultra high throughput - must be fast
+          distribution: "normal"
+          p50_ms: 3
+          p95_ms: 10
+          p99_ms: 25
+
+  # ============================================================
+  # DATABASE
+  # Latency profiles vary by query complexity:
+  # - Simple PK lookups: 1-5ms p50
+  # - Indexed queries: 5-15ms p50
+  # - Full-text search: 20-50ms p50
+  # - Complex joins: 15-40ms p50
+  # - Aggregations: 30-100ms p50
+  # ============================================================
+
   - name: "postgres"
     type: "database"
     system: "postgresql"
     version: "15.2"
     connection:
-      host: "postgres.ecommerce.svc"
+      host: "postgres.shopflow.svc"
       port: 5432
-      database: "ecommerce"
+      database: "shopflow"
     endpoints:
+      # Customer/User queries
+      - name: "select_customer_by_id"
+        operation: "SELECT"
+        table: "customers"
+        latency:
+          # PK lookup, heavily cached
+          p50_ms: 1
+          p95_ms: 4
+          p99_ms: 10
+      - name: "update_customer_preferences"
+        operation: "UPDATE"
+        table: "customer_preferences"
+        latency:
+          # Single row update
+          p50_ms: 3
+          p95_ms: 12
+          p99_ms: 30
+
+      # Product queries
+      - name: "search_products_fulltext"
+        operation: "SELECT"
+        table: "products"
+        latency:
+          # Full-text search with ranking - CPU intensive
+          p50_ms: 45
+          p95_ms: 180
+          p99_ms: 500
+      - name: "select_product_by_sku"
+        operation: "SELECT"
+        table: "products"
+        latency:
+          # Indexed lookup, cached
+          p50_ms: 1
+          p95_ms: 5
+          p99_ms: 12
+      - name: "select_product_reviews"
+        operation: "SELECT"
+        table: "product_reviews"
+        latency:
+          # Indexed query with pagination
+          p50_ms: 6
+          p95_ms: 22
+          p99_ms: 50
+      - name: "select_trending_products"
+        operation: "SELECT"
+        table: "product_analytics"
+        latency:
+          # Aggregation query - moderate complexity
+          p50_ms: 25
+          p95_ms: 80
+          p99_ms: 200
+      - name: "select_product_similarities"
+        operation: "SELECT"
+        table: "product_similarities"
+        latency:
+          # Pre-computed table, indexed
+          p50_ms: 4
+          p95_ms: 15
+          p99_ms: 35
+
+      # Cart queries (Redis-like fast access pattern)
+      - name: "select_cart_items"
+        operation: "SELECT"
+        table: "cart_items"
+        latency:
+          # Indexed by user_id
+          p50_ms: 2
+          p95_ms: 8
+          p99_ms: 18
+      - name: "upsert_cart_item"
+        operation: "INSERT"
+        table: "cart_items"
+        latency:
+          # UPSERT with conflict resolution
+          p50_ms: 4
+          p95_ms: 15
+          p99_ms: 35
+
+      # Order queries
       - name: "insert_order"
         operation: "INSERT"
         table: "orders"
         latency:
-          p50_ms: 5
-          p95_ms: 25
+          # Single insert with sequence
+          p50_ms: 3
+          p95_ms: 12
+          p99_ms: 30
         errors:
           rate: 0.005
           types:
@@ -243,69 +931,225 @@ services:
               message: "Connection timeout"
               exception: "org.postgresql.util.PSQLException"
               weight: 1.0
-
-      - name: "select_orders"
+      - name: "insert_order_items"
+        operation: "INSERT"
+        table: "order_items"
+        latency:
+          # Batch insert (avg 3-5 items)
+          p50_ms: 8
+          p95_ms: 28
+          p99_ms: 65
+      - name: "select_order_with_items"
+        operation: "SELECT"
+        table: "orders JOIN order_items"
+        latency:
+          # Join query with small result set
+          p50_ms: 5
+          p95_ms: 18
+          p99_ms: 40
+      - name: "select_orders_paginated"
         operation: "SELECT"
         table: "orders"
         latency:
-          p50_ms: 8
-          p95_ms: 30
-
-      - name: "select_inventory"
-        operation: "SELECT"
-        table: "inventory"
-        latency:
-          p50_ms: 3
-          p95_ms: 15
-
-      - name: "update_inventory"
-        operation: "UPDATE"
-        table: "inventory"
-        latency:
-          p50_ms: 6
-          p95_ms: 20
-
+          # Paginated list with sorting
+          p50_ms: 12
+          p95_ms: 45
+          p99_ms: 100
       - name: "update_order_status"
         operation: "UPDATE"
         table: "orders"
         latency:
+          # Single row update
+          p50_ms: 2
+          p95_ms: 8
+          p99_ms: 20
+      - name: "select_user_purchase_history"
+        operation: "SELECT"
+        table: "orders"
+        latency:
+          # Multi-table join with aggregation
+          p50_ms: 35
+          p95_ms: 120
+          p99_ms: 300
+
+      # Payment queries
+      - name: "insert_payment_transaction"
+        operation: "INSERT"
+        table: "payment_transactions"
+        latency:
+          # Critical write - fsync'd
           p50_ms: 5
           p95_ms: 18
+          p99_ms: 45
+      - name: "insert_refund_transaction"
+        operation: "INSERT"
+        table: "payment_transactions"
+        latency:
+          # Same as payment insert
+          p50_ms: 5
+          p95_ms: 18
+          p99_ms: 45
 
+      # Inventory queries
+      - name: "select_inventory_by_sku"
+        operation: "SELECT"
+        table: "inventory"
+        latency:
+          # Indexed lookup, frequently accessed
+          p50_ms: 1
+          p95_ms: 4
+          p99_ms: 10
+      - name: "update_inventory_reserved"
+        operation: "UPDATE"
+        table: "inventory"
+        latency:
+          # Row-level lock, can contend
+          p50_ms: 8
+          p95_ms: 35
+          p99_ms: 100
+      - name: "select_warehouse_inventory"
+        operation: "SELECT"
+        table: "warehouse_inventory"
+        latency:
+          # Cross-warehouse query
+          p50_ms: 15
+          p95_ms: 50
+          p99_ms: 120
+
+      # Shipping queries
       - name: "insert_shipment"
         operation: "INSERT"
         table: "shipments"
         latency:
-          p50_ms: 5
-          p95_ms: 22
+          p50_ms: 3
+          p95_ms: 12
+          p99_ms: 30
+      - name: "select_shipping_rates"
+        operation: "SELECT"
+        table: "shipping_rates"
+        latency:
+          # Cached rate table
+          p50_ms: 2
+          p95_ms: 8
+          p99_ms: 18
 
-  # Kafka Message Broker
+      # Notification queries
+      - name: "insert_notification_log"
+        operation: "INSERT"
+        table: "notification_logs"
+        latency:
+          # Async logging - fast
+          p50_ms: 2
+          p95_ms: 8
+          p99_ms: 18
+
+      # Analytics queries (write-optimized)
+      - name: "insert_analytics_event"
+        operation: "INSERT"
+        table: "analytics_events"
+        latency:
+          # Append-only, no indexes
+          p50_ms: 1
+          p95_ms: 4
+          p99_ms: 10
+      - name: "update_daily_sales_aggregate"
+        operation: "UPDATE"
+        table: "daily_sales_aggregates"
+        latency:
+          # UPSERT with increment
+          p50_ms: 4
+          p95_ms: 15
+          p99_ms: 35
+
+  # ============================================================
+  # MESSAGE BROKER
+  # Kafka is fast but can have occasional leader election delays
+  # ============================================================
+
   - name: "kafka"
     type: "messaging"
     system: "kafka"
-    topics:
-      - name: "orders"
-        partitions: 6
-        producers:
-          - service: "orders"
-        consumers:
-          - service: "fulfillment"
-            consumer_group: "fulfillment-group"
-            lag:
-              min_ms: 50
-              max_ms: 500
-          - service: "shipping-receiver"
-            consumer_group: "shipping-group"
-            lag:
-              min_ms: 100
-              max_ms: 1000
     endpoints:
-      - name: "publish_order"
+      # Order events - critical path, acks=all
+      - name: "publish_order_created"
         type: "messaging.producer"
-        topic: "orders"
+        topic: "order-events"
+        latency:
+          p50_ms: 4
+          p95_ms: 15
+          p99_ms: 45
+
+      # Payment events - critical, acks=all
+      - name: "publish_payment_processed"
+        type: "messaging.producer"
+        topic: "payment-events"
+        latency:
+          p50_ms: 4
+          p95_ms: 15
+          p99_ms: 40
+
+      # Refund events
+      - name: "publish_refund_processed"
+        type: "messaging.producer"
+        topic: "payment-events"
+        latency:
+          p50_ms: 4
+          p95_ms: 15
+          p99_ms: 40
+
+      # Inventory events - acks=1 for speed
+      - name: "publish_inventory_reserved"
+        type: "messaging.producer"
+        topic: "inventory-events"
         latency:
           p50_ms: 2
-          p95_ms: 10
+          p95_ms: 8
+          p99_ms: 25
+
+      # Cart events - high volume, acks=1
+      - name: "publish_cart_updated"
+        type: "messaging.producer"
+        topic: "cart-events"
+        latency:
+          p50_ms: 2
+          p95_ms: 8
+          p99_ms: 20
+
+      # Customer events
+      - name: "publish_customer_updated"
+        type: "messaging.producer"
+        topic: "customer-events"
+        latency:
+          p50_ms: 2
+          p95_ms: 8
+          p99_ms: 22
+
+      # Fulfillment events
+      - name: "publish_fulfillment_started"
+        type: "messaging.producer"
+        topic: "fulfillment-events"
+        latency:
+          p50_ms: 3
+          p95_ms: 12
+          p99_ms: 35
+
+      # Shipment events
+      - name: "publish_shipment_created"
+        type: "messaging.producer"
+        topic: "shipment-events"
+        latency:
+          p50_ms: 3
+          p95_ms: 12
+          p99_ms: 35
+
+      # Page view events - fire and forget, acks=0
+      - name: "publish_page_view"
+        type: "messaging.producer"
+        topic: "pageview-events"
+        latency:
+          p50_ms: 1
+          p95_ms: 4
+          p99_ms: 12
 
 logs:
   enabled: true
@@ -316,14 +1160,16 @@ logs:
       messages:
         - "Processing checkout request for user {user_id}"
         - "Checkout completed successfully"
+        - "Product page viewed: {product_id}"
+        - "Cart updated for user {user_id}"
 
     - service: "orders"
       level: "INFO"
       rate_per_request: 3
       messages:
         - "Creating order {order_id} for user {user_id}"
-        - "Order persisted to database"
-        - "Publishing order event to Kafka"
+        - "Order {order_id} persisted to database"
+        - "Publishing order event for {order_id}"
 
     - service: "orders"
       level: "ERROR"
@@ -332,18 +1178,46 @@ logs:
         - "Failed to create order: {exception.message}"
         - "Database connection timeout after 30s"
 
+    - service: "payment-service"
+      level: "INFO"
+      rate_per_request: 2
+      messages:
+        - "Processing payment for order {order_id}"
+        - "Payment authorized: {payment_id}"
+
+    - service: "payment-service"
+      level: "WARN"
+      rate_per_request: 0.1
+      messages:
+        - "Payment retry attempt {retry_count} for order {order_id}"
+
     - service: "fulfillment"
       level: "INFO"
       rate_per_request: 2
       messages:
-        - "Processing order {order_id} from Kafka"
+        - "Processing order {order_id} from queue"
         - "Fraud check passed for order {order_id}"
+        - "Order {order_id} ready for shipping"
 
     - service: "fulfillment"
       level: "WARN"
       rate_per_request: 0.1
       messages:
         - "High fraud score detected for order {order_id}"
+
+    - service: "shipping"
+      level: "INFO"
+      rate_per_request: 2
+      messages:
+        - "Creating shipment for order {order_id}"
+        - "Shipment {tracking_number} created with {carrier}"
+
+    - service: "notification-service"
+      level: "INFO"
+      rate_per_request: 1
+      messages:
+        - "Sending order confirmation email to {email}"
+        - "Shipping notification sent for {tracking_number}"
 
 metrics:
   enabled: true
@@ -372,6 +1246,15 @@ metrics:
       type: "histogram"
       unit: "USD"
       buckets: [10, 50, 100, 500, 1000, 5000]
+    - name: "cart.abandonment"
+      type: "counter"
+      unit: "1"
+    - name: "payment.attempts"
+      type: "counter"
+      unit: "1"
+      attributes:
+        - "payment.method"
+        - "payment.status"
 
 scenarios:
   - name: "business_hours"
@@ -394,3 +1277,243 @@ scenarios:
         services: ["postgres", "inventory"]
         multiplier: 2.0
         duration: "30m"
+
+# ============================================================
+# PROBLEM PATTERNS
+# Realistic production issues that occur infrequently.
+# These simulate real-world incidents for observability testing.
+# ============================================================
+
+problem_patterns:
+  # Database connection pool exhaustion
+  # Cause: Long-running queries hold connections, new requests queue up
+  # Effect: Latency spike across all DB-dependent services, some timeouts
+  - name: "database_connection_pool_exhaustion"
+    description: "Connection pool saturated - queries queue behind long-running transactions"
+    probability: 0.0003  # ~1x per hour at 200 req/min
+    duration: "3m"
+    affects:
+      - service: "postgres"
+        endpoints: ["*"]
+        latency_multiplier: 8.0
+        error_rate_add: 0.15
+        error_types:
+          - code: 500
+            message: "Connection pool exhausted - timeout waiting for connection"
+            exception: "org.postgresql.util.PSQLException: Cannot acquire connection from pool"
+            weight: 1.0
+
+  # Payment gateway degradation
+  # Cause: Third-party payment provider having issues
+  # Effect: Payment processing slows dramatically, some failures
+  - name: "payment_gateway_degradation"
+    description: "Payment provider experiencing elevated latency and errors"
+    probability: 0.0002  # ~1x per 90 mins
+    duration: "5m"
+    affects:
+      - service: "payment-service"
+        endpoints: ["process_payment", "process_refund"]
+        latency_multiplier: 4.0
+        error_rate_add: 0.12
+        error_types:
+          - code: 504
+            message: "Payment gateway timeout"
+            exception: "java.net.SocketTimeoutException: Read timed out"
+            weight: 0.7
+          - code: 503
+            message: "Payment gateway unavailable"
+            exception: "java.net.ConnectException: Connection refused"
+            weight: 0.3
+
+  # Kafka broker leader election
+  # Cause: Broker restart or network partition triggers leader election
+  # Effect: Brief pause in message production, consumer lag increases
+  - name: "kafka_leader_election"
+    description: "Kafka partition leader election causing temporary write failures"
+    probability: 0.00015  # ~1x per 2 hours
+    duration: "30s"
+    affects:
+      - service: "kafka"
+        endpoints: ["*"]
+        latency_multiplier: 10.0
+        error_rate_add: 0.25
+        error_types:
+          - code: 500
+            message: "NOT_LEADER_FOR_PARTITION"
+            exception: "org.apache.kafka.common.errors.NotLeaderForPartitionException"
+            weight: 0.8
+          - code: 500
+            message: "Request timed out"
+            exception: "org.apache.kafka.common.errors.TimeoutException"
+            weight: 0.2
+
+  # Memory pressure / GC pause
+  # Cause: JVM garbage collection pause in recommendation service (ML model)
+  # Effect: Service becomes unresponsive, requests timeout
+  - name: "gc_pause_recommendation_service"
+    description: "Full GC pause in recommendation service causing request timeouts"
+    probability: 0.0002  # ~1x per 90 mins
+    duration: "15s"
+    affects:
+      - service: "recommendation-service"
+        endpoints: ["*"]
+        latency_multiplier: 20.0
+        error_rate_add: 0.4
+        error_types:
+          - code: 504
+            message: "Gateway Timeout"
+            weight: 1.0
+
+  # Inventory hot partition
+  # Cause: Flash sale item causes lock contention on single SKU
+  # Effect: Inventory reservation becomes slow, some conflicts
+  - name: "inventory_hot_partition"
+    description: "High contention on popular SKU causing lock waits"
+    probability: 0.00025  # ~1x per 70 mins
+    duration: "2m"
+    affects:
+      - service: "inventory"
+        endpoints: ["reserve_stock"]
+        latency_multiplier: 6.0
+        error_rate_add: 0.08
+        error_types:
+          - code: 409
+            message: "Conflict - concurrent modification detected"
+            exception: "org.springframework.dao.OptimisticLockingFailureException"
+            weight: 0.6
+          - code: 500
+            message: "Lock wait timeout exceeded"
+            exception: "org.postgresql.util.PSQLException: ERROR: deadlock detected"
+            weight: 0.4
+
+  # DNS resolution failure
+  # Cause: DNS cache TTL expiry during resolver issues
+  # Effect: Intermittent connection failures to external services
+  - name: "dns_resolution_blip"
+    description: "DNS resolver returning stale/incorrect records"
+    probability: 0.0001  # ~1x per 3 hours
+    duration: "45s"
+    affects:
+      - service: "payment-service"
+        endpoints: ["process_payment"]
+        error_rate_add: 0.3
+        error_types:
+          - code: 503
+            message: "Service Unavailable"
+            exception: "java.net.UnknownHostException: payment-gateway.stripe.com"
+            weight: 1.0
+      - service: "shipping"
+        endpoints: ["create_shipment", "get_rates"]
+        error_rate_add: 0.25
+        error_types:
+          - code: 503
+            message: "Service Unavailable"
+            exception: "java.net.UnknownHostException: api.fedex.com"
+            weight: 1.0
+
+  # Search index rebuild
+  # Cause: Elasticsearch/PostgreSQL full-text index rebuild running
+  # Effect: Search queries become very slow
+  - name: "search_index_rebuild"
+    description: "Background index rebuild causing search performance degradation"
+    probability: 0.00012  # ~1x per 2.5 hours
+    duration: "8m"
+    affects:
+      - service: "product-catalog"
+        endpoints: ["search_products"]
+        latency_multiplier: 5.0
+        error_rate_add: 0.02
+      - service: "postgres"
+        endpoints: ["search_products_fulltext"]
+        latency_multiplier: 6.0
+
+  # Upstream rate limiting
+  # Cause: Hit rate limit on carrier API
+  # Effect: Shipping rate lookups fail with 429
+  - name: "carrier_rate_limit"
+    description: "Carrier API rate limit exceeded"
+    probability: 0.0002  # ~1x per 90 mins
+    duration: "1m"
+    affects:
+      - service: "shipping"
+        endpoints: ["get_rates"]
+        error_rate_add: 0.6
+        error_types:
+          - code: 429
+            message: "Too Many Requests - rate limit exceeded"
+            weight: 1.0
+
+  # Network partition (partial)
+  # Cause: Network switch failure causes intermittent connectivity
+  # Effect: Random failures across multiple services
+  - name: "network_partition_partial"
+    description: "Intermittent network connectivity between availability zones"
+    probability: 0.00008  # ~1x per 4 hours
+    duration: "2m"
+    affects:
+      - service: "orders"
+        endpoints: ["create_order"]
+        latency_multiplier: 3.0
+        error_rate_add: 0.1
+        error_types:
+          - code: 503
+            message: "Service Unavailable"
+            exception: "java.net.NoRouteToHostException"
+            weight: 1.0
+      - service: "fulfillment"
+        endpoints: ["process_order"]
+        latency_multiplier: 3.0
+        error_rate_add: 0.1
+      - service: "notification-service"
+        endpoints: ["*"]
+        latency_multiplier: 2.0
+        error_rate_add: 0.15
+
+  # Certificate expiry warning (upstream)
+  # Cause: Upstream service has cert issues
+  # Effect: SSL handshake failures
+  - name: "ssl_handshake_failures"
+    description: "SSL/TLS handshake failures due to upstream certificate issues"
+    probability: 0.00005  # ~1x per 6 hours
+    duration: "3m"
+    affects:
+      - service: "payment-service"
+        endpoints: ["process_payment", "process_refund"]
+        error_rate_add: 0.5
+        error_types:
+          - code: 502
+            message: "Bad Gateway - SSL handshake failed"
+            exception: "javax.net.ssl.SSLHandshakeException: PKIX path validation failed"
+            weight: 1.0
+
+  # Cache stampede
+  # Cause: Popular cached item expires, all requests hit DB simultaneously
+  # Effect: Sudden latency spike in product lookups
+  - name: "cache_stampede"
+    description: "Cache expiration causing thundering herd to database"
+    probability: 0.0003  # ~1x per hour
+    duration: "20s"
+    affects:
+      - service: "product-catalog"
+        endpoints: ["get_product"]
+        latency_multiplier: 15.0
+      - service: "postgres"
+        endpoints: ["select_product_by_sku"]
+        latency_multiplier: 10.0
+
+  # Pod eviction / OOMKill
+  # Cause: Kubernetes evicts pod due to memory pressure
+  # Effect: Service briefly unavailable, requests fail until replacement pod ready
+  - name: "pod_restart_cart_service"
+    description: "Cart service pod OOMKilled, replacement starting"
+    probability: 0.00015  # ~1x per 2 hours
+    duration: "25s"
+    affects:
+      - service: "cart-service"
+        endpoints: ["*"]
+        error_rate_add: 0.7
+        error_types:
+          - code: 503
+            message: "Service Unavailable"
+            exception: "io.grpc.StatusRuntimeException: UNAVAILABLE: Connection refused"
+            weight: 1.0
