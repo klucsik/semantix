@@ -163,7 +163,7 @@ func main() {
         <p>OpenTelemetry Simulation Engine</p>
         <div class="status">
             <span class="status-indicator"></span>
-            <strong>Running</strong> — Emitting telemetry to Dynatrace
+            <strong>Running</strong> - Emitting telemetry to Dynatrace
         </div>
         <div class="services">
             <div class="service">
