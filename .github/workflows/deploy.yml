@@ -92,7 +92,7 @@ jobs:
               --container-env="DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},DT_API_TOKEN=${{ secrets.DT_API_TOKEN }},VERSION=${{ steps.version.outputs.version }}" \
               --container-restart-policy="always" \
               --tags="http-server" \
-              --scopes="https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
+              --scopes="https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
             
             # Create firewall rule if it doesn't exist
             if ! gcloud compute firewall-rules describe allow-semantix-http \
