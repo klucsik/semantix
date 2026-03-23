@@ -1032,6 +1032,7 @@ const dashboardHTML = `<!DOCTYPE html>
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            min-height: 0;
         }
 
         .editor-tabs {
@@ -1073,6 +1074,7 @@ const dashboardHTML = `<!DOCTYPE html>
             overflow: hidden;
             display: flex;
             flex-direction: column;
+            min-height: 0;
         }
 
         .editor-textarea {
@@ -1134,10 +1136,15 @@ const dashboardHTML = `<!DOCTYPE html>
         #editor-container {
             flex: 1;
             overflow: hidden;
+            min-height: 0;
         }
 
         #editor-container .CodeMirror {
             height: 100%;
+        }
+
+        .editor-tabs {
+            flex-shrink: 0;
         }
 
         .editor-toolbar {
