@@ -45,10 +45,16 @@ func NewEngine(ctx context.Context, cfg *config.Config) (*Engine, error) {
 		return nil, fmt.Errorf("failed to create service provider factory: %w", err)
 	}
 
-	// Create a ServiceProvider for each service
+	// Create a ServiceProvider only for services that export telemetry (HTTP services).
+	// Database and messaging systems don't run OTel exporters - their operations
+	// are recorded as client spans by the calling services.
 	serviceProviders := make(map[string]*telemetry.ServiceProvider)
 	for i := range cfg.Services {
 		svc := &cfg.Services[i]
+		// Skip database and messaging - they don't export telemetry
+		if svc.Type == "database" || svc.Type == "messaging" {
+			continue
+		}
 		sp, err := factory.CreateProvider(ctx, svc)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create provider for service %s: %w", svc.Name, err)
@@ -263,12 +269,12 @@ func (e *Engine) simulateRequest(ctx context.Context, svc *config.ServiceConfig,
 
 	// Process downstream calls (if not an error or if we still want to call downstream)
 	if !isError {
-		e.processDownstreamCalls(ctx, ep.Calls)
+		e.processDownstreamCalls(ctx, svc, ep.Calls)
 	}
 }
 
 // processDownstreamCalls handles calls to downstream services.
-func (e *Engine) processDownstreamCalls(ctx context.Context, calls []config.CallConfig) {
+func (e *Engine) processDownstreamCalls(ctx context.Context, callerSvc *config.ServiceConfig, calls []config.CallConfig) {
 	if len(calls) == 0 {
 		return
 	}
@@ -292,7 +298,7 @@ func (e *Engine) processDownstreamCalls(ctx context.Context, calls []config.Call
 			wg.Add(1)
 			go func(c config.CallConfig) {
 				defer wg.Done()
-				e.executeCall(ctx, c)
+				e.executeCall(ctx, callerSvc, c)
 			}(call)
 		}
 		wg.Wait()
@@ -300,12 +306,14 @@ func (e *Engine) processDownstreamCalls(ctx context.Context, calls []config.Call
 
 	// Execute sequential calls
 	for _, call := range sequentialCalls {
-		e.executeCall(ctx, call)
+		e.executeCall(ctx, callerSvc, call)
 	}
 }
 
 // executeCall executes a single downstream call.
-func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
+// For database/messaging targets, the span is created by the caller's tracer (client span).
+// For HTTP service targets, the span is created by the target's tracer (server span).
+func (e *Engine) executeCall(ctx context.Context, callerSvc *config.ServiceConfig, call config.CallConfig) {
 	targetSvc := e.cfg.FindServiceByName(call.Service)
 	if targetSvc == nil {
 		log.Printf("Target service not found: %s", call.Service)
@@ -318,9 +326,26 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 		return
 	}
 
-	sp := e.serviceProviders[targetSvc.Name]
+	// Determine which service provider to use based on target type:
+	// - database/messaging: Use CALLER's provider (these are client spans)
+	// - http services: Use TARGET's provider (simulating server receiving request)
+	var sp *telemetry.ServiceProvider
+	var spanOwnerSvc *config.ServiceConfig
+
+	switch targetSvc.Type {
+	case "database", "messaging":
+		// Database and messaging systems don't export telemetry themselves.
+		// The calling service creates a CLIENT span for these operations.
+		sp = e.serviceProviders[callerSvc.Name]
+		spanOwnerSvc = callerSvc
+	default:
+		// HTTP services: the target service creates a SERVER span
+		sp = e.serviceProviders[targetSvc.Name]
+		spanOwnerSvc = targetSvc
+	}
+
 	if sp == nil {
-		log.Printf("No service provider for service %s", targetSvc.Name)
+		log.Printf("No service provider for service %s", spanOwnerSvc.Name)
 		return
 	}
 
@@ -348,6 +373,7 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 	ctx, span := sp.Tracer().Start(ctx, spanName, opts...)
 	defer span.End()
 
+	// Add attributes - for db/messaging, include the target system info
 	e.addSpanAttributes(span, targetSvc, targetEp)
 
 	// Simulate latency
@@ -385,7 +411,7 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 		}
 	}
 
-	// Record metrics using per-service metrics (no need for service.name attribute - it's in Resource)
+	// Record metrics using the span owner's metrics collector
 	metricAttrs := []attribute.KeyValue{}
 	switch targetSvc.Type {
 	case "database":
@@ -404,7 +430,7 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 		} else {
 			sp.Metrics().RecordMessagingReceive(ctx, latency, metricAttrs...)
 		}
-	default: // HTTP client call
+	default: // HTTP service call
 		statusCode := 200
 		if isError && errorType != nil {
 			statusCode = errorType.Code
@@ -417,15 +443,15 @@ func (e *Engine) executeCall(ctx context.Context, call config.CallConfig) {
 		sp.Metrics().RecordHTTPClientRequest(ctx, latency, metricAttrs...)
 	}
 
-	// Generate correlated logs for this service
-	logEntries := e.logger.GenerateLogs(ctx, targetSvc.Name, isError)
+	// Generate correlated logs for the span owner service
+	logEntries := e.logger.GenerateLogs(ctx, spanOwnerSvc.Name, isError)
 	for _, entry := range logEntries {
 		log.Printf("[%s] %s: %s (trace=%s)", entry.SeverityText, entry.ServiceName, entry.Body, entry.TraceID)
 	}
 
-	// Recursively process downstream calls
-	if !isError {
-		e.processDownstreamCalls(ctx, targetEp.Calls)
+	// Recursively process downstream calls (only for HTTP services that have their own endpoints)
+	if !isError && targetSvc.Type == "http" {
+		e.processDownstreamCalls(ctx, targetSvc, targetEp.Calls)
 	}
 }
 
