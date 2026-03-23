@@ -1,4 +1,4 @@
-name: Deploy to Cloud Run
+name: Deploy to GCE
 
 on:
   workflow_run:
@@ -12,8 +12,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SERVICE_NAME: semantix
-  DT_ENDPOINT: ${{ secrets.DT_ENDPOINT }}
+  INSTANCE_NAME: semantix
+  MACHINE_TYPE: e2-micro
+  IMAGE_NAME: semantix
 
 jobs:
   deploy:
@@ -42,25 +43,107 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy ${{ env.SERVICE_NAME }} \
-            --source . \
-            --region ${{ secrets.GCP_REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --set-env-vars "DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},VERSION=${{ steps.version.outputs.version }}" \
-            --set-secrets "DT_API_TOKEN=dynatrace-api-token:latest" \
-            --memory 512Mi \
-            --cpu 1 \
-            --timeout 300 \
-            --min-instances 0 \
-            --max-instances 1
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io --quiet
 
-      - name: Show service URL
+      - name: Build and push container image
         run: |
-          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
-            --region ${{ secrets.GCP_REGION }} \
-            --format 'value(status.url)')
-          echo "Service deployed to: $URL"
-          echo "Version: ${{ steps.version.outputs.version }}"
+          docker build \
+            -t "gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" \
+            -t "gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:latest" \
+            --build-arg "VERSION=${{ steps.version.outputs.version }}" \
+            .
+          
+          docker push "gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
+          docker push "gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:latest"
+
+      - name: Deploy to GCE
+        run: |
+          ZONE="${{ secrets.GCP_ZONE }}"
+          if [ -z "$ZONE" ]; then
+            ZONE="us-central1-a"
+          fi
+          
+          # Check if instance exists
+          if gcloud compute instances describe "${{ env.INSTANCE_NAME }}" \
+              --zone="$ZONE" \
+              --project="${{ secrets.GCP_PROJECT_ID }}" &>/dev/null; then
+            echo "Instance exists, updating container..."
+            
+            # Update the container image on existing instance
+            gcloud compute instances update-container "${{ env.INSTANCE_NAME }}" \
+              --zone="$ZONE" \
+              --project="${{ secrets.GCP_PROJECT_ID }}" \
+              --container-image="gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" \
+              --container-env="DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},DT_API_TOKEN=${{ secrets.DT_API_TOKEN }},VERSION=${{ steps.version.outputs.version }}"
+          else
+            echo "Creating new instance..."
+            
+            # Create new instance with Container-Optimized OS
+            gcloud compute instances create-with-container "${{ env.INSTANCE_NAME }}" \
+              --project="${{ secrets.GCP_PROJECT_ID }}" \
+              --zone="$ZONE" \
+              --machine-type="${{ env.MACHINE_TYPE }}" \
+              --image-family="cos-stable" \
+              --image-project="cos-cloud" \
+              --boot-disk-size="10GB" \
+              --boot-disk-type="pd-standard" \
+              --container-image="gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" \
+              --container-env="DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},DT_API_TOKEN=${{ secrets.DT_API_TOKEN }},VERSION=${{ steps.version.outputs.version }}" \
+              --container-restart-policy="always" \
+              --tags="http-server" \
+              --scopes="https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
+            
+            # Create firewall rule if it doesn't exist
+            if ! gcloud compute firewall-rules describe allow-semantix-http \
+                --project="${{ secrets.GCP_PROJECT_ID }}" &>/dev/null; then
+              gcloud compute firewall-rules create allow-semantix-http \
+                --project="${{ secrets.GCP_PROJECT_ID }}" \
+                --allow="tcp:8080" \
+                --target-tags="http-server" \
+                --description="Allow HTTP access to Semantix dashboard"
+            fi
+          fi
+
+      - name: Get instance IP and verify
+        id: verify
+        run: |
+          ZONE="${{ secrets.GCP_ZONE }}"
+          if [ -z "$ZONE" ]; then
+            ZONE="us-central1-a"
+          fi
+          
+          EXTERNAL_IP=$(gcloud compute instances describe "${{ env.INSTANCE_NAME }}" \
+            --zone="$ZONE" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --format="get(networkInterfaces[0].accessConfigs[0].natIP)")
+          
+          echo "external_ip=$EXTERNAL_IP" >> $GITHUB_OUTPUT
+          echo "Dashboard URL: http://$EXTERNAL_IP:8080"
+          
+          # Wait for container to start
+          echo "Waiting for container to start..."
+          sleep 30
+          
+          # Health check
+          echo "Checking health endpoint..."
+          for i in {1..5}; do
+            if curl -sf "http://$EXTERNAL_IP:8080/health" --max-time 10; then
+              echo ""
+              echo "Health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          
+          echo "Health check failed after 5 attempts"
+          exit 1
+
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instance**: ${{ env.INSTANCE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dashboard**: http://${{ steps.verify.outputs.external_ip }}:8080" >> $GITHUB_STEP_SUMMARY

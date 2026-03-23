@@ -46,6 +46,7 @@ steps:
       - '1'
       - '--max-instances'
       - '1'
+      - '--no-cpu-throttling'
       - '--no-allow-unauthenticated'
       - '--set-env-vars'
       - 'DT_ENDPOINT=${_DT_ENDPOINT}'
