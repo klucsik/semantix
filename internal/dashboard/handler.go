@@ -1168,7 +1168,7 @@ const dashboardHTML = `<!DOCTYPE html>
 
             for (const ep of service.endpoints) {
                 const methodLabel = ep.method || ep.operation || getEndpointTypeLabel(ep.type);
-                const routeLabel = ep.route || (ep.table ? ` + "`" + `${ep.operation} ${ep.table}` + "`" + `) || ep.topic || '';
+                const routeLabel = ep.route || (ep.table ? ` + "`" + `${ep.operation} ${ep.table}` + "`" + ` : '') || ep.topic || '';
                 
                 html += ` + "`" + `
                     <div class="endpoint-card">
@@ -1199,7 +1199,7 @@ const dashboardHTML = `<!DOCTYPE html>
                                     <div class="endpoint-metric-label">Errors</div>
                                 </div>
                                 <div class="endpoint-metric">
-                                    <div class="endpoint-metric-value" style="color: var(--text-secondary);">${ep.errorCodes?.join(', ') || '-'}</div>
+                                    <div class="endpoint-metric-value" style="color: var(--text-secondary);">${(ep.errorCodes && ep.errorCodes.join(', ')) || '-'}</div>
                                     <div class="endpoint-metric-label">Codes</div>
                                 </div>
                                 <div class="endpoint-metric">
@@ -1231,9 +1231,9 @@ const dashboardHTML = `<!DOCTYPE html>
         }
 
         function getEndpointTypeLabel(type) {
-            if (type?.includes('consumer')) return 'CONSUMER';
-            if (type?.includes('producer')) return 'PRODUCER';
-            return type?.toUpperCase() || 'HTTP';
+            if (type && type.includes('consumer')) return 'CONSUMER';
+            if (type && type.includes('producer')) return 'PRODUCER';
+            return (type && type.toUpperCase()) || 'HTTP';
         }
 
         // Initialize

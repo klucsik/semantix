@@ -54,6 +54,11 @@ go.work
 *.tmp
 /tmp/
 
+# Playwright
+test/e2e/node_modules/
+test/e2e/playwright-report/
+test/e2e/test-results/
+
 # Debug
 __debug_bin*
 
