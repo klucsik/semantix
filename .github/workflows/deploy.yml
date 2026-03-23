@@ -15,6 +15,7 @@ env:
   INSTANCE_NAME: semantix
   MACHINE_TYPE: e2-micro
   IMAGE_NAME: semantix
+  STATIC_IP_NAME: semantix-ip
 
 jobs:
   deploy:
@@ -57,6 +58,36 @@ jobs:
           docker push "gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
           docker push "gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:latest"
 
+      - name: Ensure static IP exists
+        id: static_ip
+        run: |
+          REGION="${{ secrets.GCP_ZONE }}"
+          if [ -z "$REGION" ]; then
+            REGION="us-central1-a"
+          fi
+          # Extract region from zone (e.g., us-central1-a -> us-central1)
+          REGION="${REGION%-*}"
+          
+          # Check if static IP exists, create if not
+          if ! gcloud compute addresses describe "${{ env.STATIC_IP_NAME }}" \
+              --region="$REGION" \
+              --project="${{ secrets.GCP_PROJECT_ID }}" &>/dev/null; then
+            echo "Creating static IP..."
+            gcloud compute addresses create "${{ env.STATIC_IP_NAME }}" \
+              --region="$REGION" \
+              --project="${{ secrets.GCP_PROJECT_ID }}"
+          fi
+          
+          # Get the static IP address
+          STATIC_IP=$(gcloud compute addresses describe "${{ env.STATIC_IP_NAME }}" \
+            --region="$REGION" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --format="get(address)")
+          
+          echo "static_ip=$STATIC_IP" >> $GITHUB_OUTPUT
+          echo "region=$REGION" >> $GITHUB_OUTPUT
+          echo "Static IP: $STATIC_IP"
+
       - name: Deploy to GCE
         run: |
           ZONE="${{ secrets.GCP_ZONE }}"
@@ -77,9 +108,9 @@ jobs:
               --container-image="gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" \
               --container-env="DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},DT_API_TOKEN=${{ secrets.DT_API_TOKEN }},VERSION=${{ steps.version.outputs.version }}"
           else
-            echo "Creating new instance..."
+            echo "Creating new instance with static IP..."
             
-            # Create new instance with Container-Optimized OS
+            # Create new instance with Container-Optimized OS and static IP
             gcloud compute instances create-with-container "${{ env.INSTANCE_NAME }}" \
               --project="${{ secrets.GCP_PROJECT_ID }}" \
               --zone="$ZONE" \
@@ -92,6 +123,7 @@ jobs:
               --container-env="DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},DT_API_TOKEN=${{ secrets.DT_API_TOKEN }},VERSION=${{ steps.version.outputs.version }}" \
               --container-restart-policy="always" \
               --tags="http-server" \
+              --address="${{ steps.static_ip.outputs.static_ip }}" \
               --scopes="https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
             
             # Create firewall rule if it doesn't exist
@@ -108,15 +140,8 @@ jobs:
       - name: Get instance IP and verify
         id: verify
         run: |
-          ZONE="${{ secrets.GCP_ZONE }}"
-          if [ -z "$ZONE" ]; then
-            ZONE="us-central1-a"
-          fi
-          
-          EXTERNAL_IP=$(gcloud compute instances describe "${{ env.INSTANCE_NAME }}" \
-            --zone="$ZONE" \
-            --project="${{ secrets.GCP_PROJECT_ID }}" \
-            --format="get(networkInterfaces[0].accessConfigs[0].natIP)")
+          # Use the static IP
+          EXTERNAL_IP="${{ steps.static_ip.outputs.static_ip }}"
           
           echo "external_ip=$EXTERNAL_IP" >> $GITHUB_OUTPUT
           echo "Dashboard URL: http://$EXTERNAL_IP:8080"
@@ -147,3 +172,5 @@ jobs:
           echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Instance**: ${{ env.INSTANCE_NAME }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Dashboard**: http://${{ steps.verify.outputs.external_ip }}:8080" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This IP is static and will not change between deployments." >> $GITHUB_STEP_SUMMARY
