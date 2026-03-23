@@ -133,8 +133,8 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Register dashboard routes
-	dash := dashboard.New(configs, getVersion())
+	// Register dashboard routes (use first config for editing)
+	dash := dashboard.New(configs[0], getVersion())
 	dash.RegisterRoutes(mux)
 
 	server := &http.Server{Addr: ":" + port, Handler: mux}

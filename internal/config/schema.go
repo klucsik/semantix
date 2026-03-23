@@ -5,14 +5,15 @@ import "time"
 
 // Config is the root configuration structure.
 type Config struct {
-	Version        string            `yaml:"version"`
-	Simulation     SimulationConfig  `yaml:"simulation"`
-	Exporter       ExporterConfig    `yaml:"exporter"`
-	GlobalResource map[string]string `yaml:"global_resource_attributes"`
-	Services       []ServiceConfig   `yaml:"services"`
-	Logs           LogsConfig        `yaml:"logs"`
-	Metrics        MetricsConfig     `yaml:"metrics"`
-	Scenarios      []ScenarioConfig  `yaml:"scenarios"`
+	Version         string                 `yaml:"version"`
+	Simulation      SimulationConfig       `yaml:"simulation"`
+	Exporter        ExporterConfig         `yaml:"exporter"`
+	GlobalResource  map[string]string      `yaml:"global_resource_attributes"`
+	Services        []ServiceConfig        `yaml:"services"`
+	Logs            LogsConfig             `yaml:"logs"`
+	Metrics         MetricsConfig          `yaml:"metrics"`
+	Scenarios       []ScenarioConfig       `yaml:"scenarios"`
+	ProblemPatterns []ProblemPatternConfig `yaml:"problem_patterns,omitempty"`
 }
 
 // SimulationConfig controls the simulation timing and behavior.
@@ -32,7 +33,7 @@ type ExporterConfig struct {
 // ServiceConfig defines a virtual service in the topology.
 type ServiceConfig struct {
 	Name               string            `yaml:"name"`
-	Type               string            `yaml:"type,omitempty"`   // "http", "database", "messaging"
+	Type               string            `yaml:"type,omitempty"` // "http", "database", "messaging"
 	Version            string            `yaml:"version,omitempty"`
 	System             string            `yaml:"system,omitempty"` // For db/messaging: "postgresql", "kafka"
 	ResourceAttributes map[string]string `yaml:"resource_attributes,omitempty"`
@@ -89,7 +90,7 @@ type ErrorConfig struct {
 
 // ErrorType defines a specific error response.
 type ErrorType struct {
-	Code      int     `yaml:"code"`               // HTTP status code
+	Code      int     `yaml:"code"` // HTTP status code
 	Message   string  `yaml:"message"`
 	Exception string  `yaml:"exception,omitempty"` // Exception class name
 	Weight    float64 `yaml:"weight"`              // Relative weight for selection
@@ -132,12 +133,12 @@ type LagConfig struct {
 
 // AnomalyConfig defines chaos/anomaly injection.
 type AnomalyConfig struct {
-	Type        string   `yaml:"type"`                  // "latency_spike", "error_burst"
-	Probability float64  `yaml:"probability"`           // Probability of occurrence
-	Multiplier  float64  `yaml:"multiplier,omitempty"`  // For latency
-	ErrorRate   float64  `yaml:"error_rate,omitempty"`  // For error burst
-	Duration    string   `yaml:"duration"`              // How long the anomaly lasts
-	Services    []string `yaml:"services,omitempty"`    // Target services (for scenarios)
+	Type        string   `yaml:"type"`                 // "latency_spike", "error_burst"
+	Probability float64  `yaml:"probability"`          // Probability of occurrence
+	Multiplier  float64  `yaml:"multiplier,omitempty"` // For latency
+	ErrorRate   float64  `yaml:"error_rate,omitempty"` // For error burst
+	Duration    string   `yaml:"duration"`             // How long the anomaly lasts
+	Services    []string `yaml:"services,omitempty"`   // Target services (for scenarios)
 }
 
 // LogsConfig controls log generation.
@@ -193,6 +194,24 @@ type ScenarioConfig struct {
 	Schedule          string          `yaml:"schedule"` // Cron-like expression
 	TrafficMultiplier float64         `yaml:"traffic_multiplier"`
 	Anomalies         []AnomalyConfig `yaml:"anomalies,omitempty"`
+}
+
+// ProblemPatternConfig defines realistic production issues that occur infrequently.
+type ProblemPatternConfig struct {
+	Name        string                       `yaml:"name"`
+	Description string                       `yaml:"description,omitempty"`
+	Probability float64                      `yaml:"probability"` // Probability per request of triggering
+	Duration    string                       `yaml:"duration"`    // How long the problem lasts
+	Affects     []ProblemPatternAffectConfig `yaml:"affects"`
+}
+
+// ProblemPatternAffectConfig defines how a problem pattern affects a service.
+type ProblemPatternAffectConfig struct {
+	Service           string      `yaml:"service"`
+	Endpoints         []string    `yaml:"endpoints,omitempty"` // ["*"] for all endpoints
+	LatencyMultiplier float64     `yaml:"latency_multiplier,omitempty"`
+	ErrorRateAdd      float64     `yaml:"error_rate_add,omitempty"` // Additional error rate during problem
+	ErrorTypes        []ErrorType `yaml:"error_types,omitempty"`
 }
 
 // ParsedTickInterval returns the tick interval as a time.Duration.

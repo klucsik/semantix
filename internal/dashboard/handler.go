@@ -4,6 +4,7 @@ package dashboard
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -12,16 +13,21 @@ import (
 
 // Handler serves the dashboard UI and API endpoints.
 type Handler struct {
-	configs []*config.Config
+	manager *config.Manager
 	version string
 }
 
 // New creates a new dashboard handler.
-func New(configs []*config.Config, version string) *Handler {
+func New(cfg *config.Config, version string) *Handler {
 	return &Handler{
-		configs: configs,
+		manager: config.NewManager(cfg),
 		version: version,
 	}
+}
+
+// GetManager returns the config manager for external access (e.g., hot reload).
+func (h *Handler) GetManager() *config.Manager {
+	return h.manager
 }
 
 // RegisterRoutes registers all dashboard routes.
@@ -30,6 +36,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", h.serveHealth)
 	mux.HandleFunc("/api/topology", h.serveTopology)
 	mux.HandleFunc("/api/config", h.serveConfig)
+
+	// Config editing endpoints
+	mux.HandleFunc("/api/config/services", h.handleServicesConfig)
+	mux.HandleFunc("/api/config/problem_patterns", h.handleProblemPatternsConfig)
+	mux.HandleFunc("/api/config/scenarios", h.handleScenariosConfig)
+	mux.HandleFunc("/api/config/pending", h.handlePendingChanges)
+	mux.HandleFunc("/api/config/save", h.handleSaveChanges)
+	mux.HandleFunc("/api/config/reset", h.handleResetConfig)
+	mux.HandleFunc("/api/config/changelog", h.handleChangelog)
 }
 
 func (h *Handler) serveHealth(w http.ResponseWriter, r *http.Request) {
@@ -107,25 +122,237 @@ func (h *Handler) serveConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	cfg := h.manager.GetCurrentConfig()
+
 	// Return sanitized config (without tokens)
 	type SafeConfig struct {
-		Version    string                  `json:"version"`
-		Simulation config.SimulationConfig `json:"simulation"`
-		Services   []config.ServiceConfig  `json:"services"`
-		Scenarios  []config.ScenarioConfig `json:"scenarios"`
+		Version         string                        `json:"version"`
+		Simulation      config.SimulationConfig       `json:"simulation"`
+		Services        []config.ServiceConfig        `json:"services"`
+		Scenarios       []config.ScenarioConfig       `json:"scenarios"`
+		ProblemPatterns []config.ProblemPatternConfig `json:"problem_patterns"`
 	}
 
-	var safeConfigs []SafeConfig
-	for _, cfg := range h.configs {
-		safeConfigs = append(safeConfigs, SafeConfig{
-			Version:    cfg.Version,
-			Simulation: cfg.Simulation,
-			Services:   cfg.Services,
-			Scenarios:  cfg.Scenarios,
-		})
+	safeConfig := SafeConfig{
+		Version:         cfg.Version,
+		Simulation:      cfg.Simulation,
+		Services:        cfg.Services,
+		Scenarios:       cfg.Scenarios,
+		ProblemPatterns: cfg.ProblemPatterns,
 	}
 
-	json.NewEncoder(w).Encode(safeConfigs)
+	json.NewEncoder(w).Encode(safeConfig)
+}
+
+// handleServicesConfig handles GET/POST for services configuration.
+func (h *Handler) handleServicesConfig(w http.ResponseWriter, r *http.Request) {
+	h.setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		yaml, err := h.manager.GetServicesYAML()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(yaml))
+
+	case "POST":
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := h.manager.AddPendingChange(config.ChangeTypeServices, string(body)); err != nil {
+			http.Error(w, "Invalid YAML: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleProblemPatternsConfig handles GET/POST for problem patterns configuration.
+func (h *Handler) handleProblemPatternsConfig(w http.ResponseWriter, r *http.Request) {
+	h.setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		yaml, err := h.manager.GetProblemPatternsYAML()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(yaml))
+
+	case "POST":
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := h.manager.AddPendingChange(config.ChangeTypeProblemPatterns, string(body)); err != nil {
+			http.Error(w, "Invalid YAML: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleScenariosConfig handles GET/POST for scenarios configuration.
+func (h *Handler) handleScenariosConfig(w http.ResponseWriter, r *http.Request) {
+	h.setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	switch r.Method {
+	case "GET":
+		yaml, err := h.manager.GetScenariosYAML()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(yaml))
+
+	case "POST":
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := h.manager.AddPendingChange(config.ChangeTypeScenarios, string(body)); err != nil {
+			http.Error(w, "Invalid YAML: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handlePendingChanges returns pending changes.
+func (h *Handler) handlePendingChanges(w http.ResponseWriter, r *http.Request) {
+	h.setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method == "DELETE" {
+		h.manager.ClearPendingChanges()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
+		return
+	}
+
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(h.manager.GetPendingChanges())
+}
+
+// handleSaveChanges applies all pending changes.
+func (h *Handler) handleSaveChanges(w http.ResponseWriter, r *http.Request) {
+	h.setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	newConfig, entry, err := h.manager.ApplyPendingChanges()
+	if err != nil {
+		http.Error(w, "Failed to apply changes: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "applied",
+		"changelog": entry,
+		"services":  len(newConfig.Services),
+	})
+}
+
+// handleResetConfig resets to default configuration.
+func (h *Handler) handleResetConfig(w http.ResponseWriter, r *http.Request) {
+	h.setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg := h.manager.ResetToDefaults()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "reset",
+		"services": len(cfg.Services),
+	})
+}
+
+// handleChangelog returns the changelog history.
+func (h *Handler) handleChangelog(w http.ResponseWriter, r *http.Request) {
+	h.setCORSHeaders(w)
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method == "DELETE" {
+		h.manager.ClearChangelog()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
+		return
+	}
+
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(h.manager.GetChangelog())
+}
+
+func (h *Handler) setCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
 func (h *Handler) buildTopology() TopologyData {
@@ -137,99 +364,99 @@ func (h *Handler) buildTopology() TopologyData {
 	var totalErrorRate float64
 	var errorRateCount int
 
-	// Process all configs
-	for _, cfg := range h.configs {
-		for _, svc := range cfg.Services {
-			node := TopologyNode{
-				ID:      svc.Name,
-				Name:    svc.Name,
-				Type:    getServiceType(svc),
-				Version: svc.Version,
-				System:  svc.System,
-			}
+	// Get current config from manager
+	cfg := h.manager.GetCurrentConfig()
 
-			var svcRPM float64
-			var svcLatency float64
-			var svcErrorRate float64
-			var latencyCount int
-			var errorCount int
-
-			for _, ep := range svc.Endpoints {
-				rpm := 0.0
-				if ep.Traffic != nil {
-					rpm = ep.Traffic.RequestsPerMinute
-				}
-				svcRPM += rpm
-				totalRPM += rpm
-				totalEndpoints++
-
-				errRate := 0.0
-				var errCodes []int
-				if ep.Errors != nil {
-					errRate = ep.Errors.Rate
-					svcErrorRate += errRate
-					errorCount++
-					totalErrorRate += errRate
-					errorRateCount++
-					for _, et := range ep.Errors.Types {
-						errCodes = append(errCodes, et.Code)
-					}
-				}
-
-				svcLatency += ep.Latency.P50Ms
-				latencyCount++
-
-				var calls []string
-				for _, call := range ep.Calls {
-					calls = append(calls, fmt.Sprintf("%s.%s", call.Service, call.Endpoint))
-
-					linkType := "sync"
-					if call.Async {
-						linkType = "async"
-					}
-
-					links = append(links, TopologyLink{
-						Source:   svc.Name,
-						Target:   call.Service,
-						Type:     linkType,
-						Endpoint: call.Endpoint,
-						RPM:      rpm,
-					})
-				}
-
-				node.Endpoints = append(node.Endpoints, EndpointSummary{
-					Name:         ep.Name,
-					Type:         ep.Type,
-					Method:       ep.Method,
-					Route:        ep.Route,
-					Operation:    ep.Operation,
-					Table:        ep.Table,
-					Topic:        ep.Topic,
-					RPM:          rpm,
-					P50Ms:        ep.Latency.P50Ms,
-					P95Ms:        ep.Latency.P95Ms,
-					P99Ms:        ep.Latency.P99Ms,
-					ErrorRate:    errRate,
-					ErrorCodes:   errCodes,
-					Calls:        calls,
-					HasAnomalies: len(ep.Anomalies) > 0,
-				})
-
-				if len(ep.Anomalies) > 0 {
-					node.HasAnomalies = true
-				}
-			}
-
-			node.TotalRPM = svcRPM
-			if latencyCount > 0 {
-				node.AvgLatencyMs = svcLatency / float64(latencyCount)
-			}
-			if errorCount > 0 {
-				node.ErrorRate = svcErrorRate / float64(errorCount)
-			}
-
-			nodes = append(nodes, node)
+	for _, svc := range cfg.Services {
+		node := TopologyNode{
+			ID:      svc.Name,
+			Name:    svc.Name,
+			Type:    getServiceType(svc),
+			Version: svc.Version,
+			System:  svc.System,
 		}
+
+		var svcRPM float64
+		var svcLatency float64
+		var svcErrorRate float64
+		var latencyCount int
+		var errorCount int
+
+		for _, ep := range svc.Endpoints {
+			rpm := 0.0
+			if ep.Traffic != nil {
+				rpm = ep.Traffic.RequestsPerMinute
+			}
+			svcRPM += rpm
+			totalRPM += rpm
+			totalEndpoints++
+
+			errRate := 0.0
+			var errCodes []int
+			if ep.Errors != nil {
+				errRate = ep.Errors.Rate
+				svcErrorRate += errRate
+				errorCount++
+				totalErrorRate += errRate
+				errorRateCount++
+				for _, et := range ep.Errors.Types {
+					errCodes = append(errCodes, et.Code)
+				}
+			}
+
+			svcLatency += ep.Latency.P50Ms
+			latencyCount++
+
+			var calls []string
+			for _, call := range ep.Calls {
+				calls = append(calls, fmt.Sprintf("%s.%s", call.Service, call.Endpoint))
+
+				linkType := "sync"
+				if call.Async {
+					linkType = "async"
+				}
+
+				links = append(links, TopologyLink{
+					Source:   svc.Name,
+					Target:   call.Service,
+					Type:     linkType,
+					Endpoint: call.Endpoint,
+					RPM:      rpm,
+				})
+			}
+
+			node.Endpoints = append(node.Endpoints, EndpointSummary{
+				Name:         ep.Name,
+				Type:         ep.Type,
+				Method:       ep.Method,
+				Route:        ep.Route,
+				Operation:    ep.Operation,
+				Table:        ep.Table,
+				Topic:        ep.Topic,
+				RPM:          rpm,
+				P50Ms:        ep.Latency.P50Ms,
+				P95Ms:        ep.Latency.P95Ms,
+				P99Ms:        ep.Latency.P99Ms,
+				ErrorRate:    errRate,
+				ErrorCodes:   errCodes,
+				Calls:        calls,
+				HasAnomalies: len(ep.Anomalies) > 0,
+			})
+
+			if len(ep.Anomalies) > 0 {
+				node.HasAnomalies = true
+			}
+		}
+
+		node.TotalRPM = svcRPM
+		if latencyCount > 0 {
+			node.AvgLatencyMs = svcLatency / float64(latencyCount)
+		}
+		if errorCount > 0 {
+			node.ErrorRate = svcErrorRate / float64(errorCount)
+		}
+
+		nodes = append(nodes, node)
 	}
 
 	avgErrorRate := 0.0
@@ -388,7 +615,7 @@ const dashboardHTML = `<!DOCTYPE html>
         /* Main Layout */
         .main-container {
             display: grid;
-            grid-template-columns: 1fr 380px;
+            grid-template-columns: 1fr 320px 400px;
             height: calc(100vh - 60px);
         }
 
@@ -805,6 +1032,194 @@ const dashboardHTML = `<!DOCTYPE html>
             background: var(--border);
             border-radius: 3px;
         }
+
+        /* Editor Panel */
+        .editor-panel {
+            background: rgba(22, 27, 34, 0.4);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .editor-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-glass);
+        }
+
+        .editor-tab {
+            padding: 0.75rem 1rem;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-family: var(--font-sans);
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .editor-tab:hover {
+            color: var(--text-secondary);
+            background: rgba(255,255,255,0.03);
+        }
+
+        .editor-tab.active {
+            color: var(--accent-blue);
+            border-bottom-color: var(--accent-blue);
+        }
+
+        .editor-tab.modified::after {
+            content: '*';
+            color: var(--accent-orange);
+            margin-left: 4px;
+        }
+
+        .editor-content {
+            flex: 1;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .editor-textarea {
+            flex: 1;
+            width: 100%;
+            padding: 1rem;
+            background: rgba(0,0,0,0.3);
+            border: none;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            line-height: 1.6;
+            resize: none;
+            outline: none;
+        }
+
+        .editor-textarea:focus {
+            background: rgba(0,0,0,0.4);
+        }
+
+        .editor-toolbar {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            border-top: 1px solid var(--border);
+            background: var(--bg-glass);
+            align-items: center;
+        }
+
+        .editor-btn {
+            padding: 0.5rem 1rem;
+            font-size: 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: var(--font-sans);
+            transition: all 0.2s;
+        }
+
+        .editor-btn-primary {
+            background: var(--accent-blue);
+            color: var(--bg-primary);
+            border: none;
+        }
+
+        .editor-btn-primary:hover {
+            background: #79b8ff;
+        }
+
+        .editor-btn-primary:disabled {
+            background: var(--border);
+            color: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        .editor-btn-secondary {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .editor-btn-secondary:hover {
+            color: var(--text-primary);
+            border-color: var(--text-secondary);
+        }
+
+        .editor-btn-danger {
+            background: transparent;
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+        }
+
+        .editor-btn-danger:hover {
+            background: rgba(248, 81, 73, 0.15);
+        }
+
+        .editor-status {
+            flex: 1;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-align: right;
+        }
+
+        .editor-status.pending {
+            color: var(--accent-orange);
+        }
+
+        .editor-status.saved {
+            color: var(--accent-green);
+        }
+
+        .editor-status.error {
+            color: var(--accent-red);
+        }
+
+        /* Changelog Panel */
+        .changelog-panel {
+            padding: 1rem;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .changelog-entry {
+            background: var(--bg-glass);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .changelog-time {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .changelog-summary {
+            font-size: 0.8rem;
+            color: var(--text-primary);
+            margin-top: 0.25rem;
+        }
+
+        .changelog-changes {
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        .changelog-change {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+
+        .changelog-empty {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 2rem;
+        }
     </style>
 </head>
 <body>
@@ -867,6 +1282,24 @@ const dashboardHTML = `<!DOCTYPE html>
                 <div class="empty-state-icon"></div>
                 <div class="empty-state-title">Select a Service</div>
                 <div class="empty-state-text">Click on any service node to view detailed telemetry information and endpoint configuration.</div>
+            </div>
+        </div>
+
+        <div class="editor-panel" id="editor-panel">
+            <div class="editor-tabs">
+                <button class="editor-tab active" data-tab="services" onclick="switchEditorTab('services')">Services</button>
+                <button class="editor-tab" data-tab="problem_patterns" onclick="switchEditorTab('problem_patterns')">Problem Patterns</button>
+                <button class="editor-tab" data-tab="scenarios" onclick="switchEditorTab('scenarios')">Scenarios</button>
+                <button class="editor-tab" data-tab="changelog" onclick="switchEditorTab('changelog')">Changelog</button>
+            </div>
+            <div class="editor-content" id="editor-content">
+                <textarea class="editor-textarea" id="editor-textarea" placeholder="Loading configuration..."></textarea>
+            </div>
+            <div class="editor-toolbar">
+                <button class="editor-btn editor-btn-primary" id="save-btn" onclick="saveAllChanges()" disabled>Save All</button>
+                <button class="editor-btn editor-btn-secondary" id="discard-btn" onclick="discardChanges()" disabled>Discard</button>
+                <button class="editor-btn editor-btn-danger" id="reset-btn" onclick="resetToDefaults()">Reset</button>
+                <span class="editor-status" id="editor-status">No pending changes</span>
             </div>
         </div>
     </div>
@@ -1347,8 +1780,243 @@ const dashboardHTML = `<!DOCTYPE html>
             return (type && type.toUpperCase()) || 'HTTP';
         }
 
+        // ===== Configuration Editor =====
+        let currentEditorTab = 'services';
+        let originalContent = {};
+        let pendingChanges = {};
+        let isChangelogView = false;
+
+        async function loadEditorContent(tab) {
+            const textarea = document.getElementById('editor-textarea');
+            const content = document.getElementById('editor-content');
+            
+            if (tab === 'changelog') {
+                isChangelogView = true;
+                await renderChangelog();
+                return;
+            }
+            
+            isChangelogView = false;
+            content.innerHTML = '<textarea class="editor-textarea" id="editor-textarea" placeholder="Loading..."></textarea>';
+            
+            try {
+                const response = await fetch('/api/config/' + tab);
+                const yaml = await response.text();
+                originalContent[tab] = yaml;
+                
+                const newTextarea = document.getElementById('editor-textarea');
+                // Show pending change if exists, otherwise show original
+                newTextarea.value = pendingChanges[tab] !== undefined ? pendingChanges[tab] : yaml;
+                
+                // Listen for changes
+                newTextarea.addEventListener('input', () => onEditorChange(tab));
+            } catch (error) {
+                console.error('Failed to load config:', error);
+                document.getElementById('editor-textarea').value = '# Error loading configuration: ' + error.message;
+            }
+        }
+
+        function onEditorChange(tab) {
+            const textarea = document.getElementById('editor-textarea');
+            const newValue = textarea.value;
+            
+            // Check if changed from original
+            if (newValue !== originalContent[tab]) {
+                pendingChanges[tab] = newValue;
+            } else {
+                delete pendingChanges[tab];
+            }
+            
+            updateEditorUI();
+        }
+
+        function updateEditorUI() {
+            const hasPending = Object.keys(pendingChanges).length > 0;
+            
+            document.getElementById('save-btn').disabled = !hasPending;
+            document.getElementById('discard-btn').disabled = !hasPending;
+            
+            const status = document.getElementById('editor-status');
+            if (hasPending) {
+                const sections = Object.keys(pendingChanges);
+                status.textContent = 'Pending: ' + sections.join(', ');
+                status.className = 'editor-status pending';
+            } else {
+                status.textContent = 'No pending changes';
+                status.className = 'editor-status';
+            }
+            
+            // Update tab modified indicators
+            document.querySelectorAll('.editor-tab').forEach(tab => {
+                const tabName = tab.dataset.tab;
+                if (pendingChanges[tabName] !== undefined) {
+                    tab.classList.add('modified');
+                } else {
+                    tab.classList.remove('modified');
+                }
+            });
+        }
+
+        function switchEditorTab(tab) {
+            // Save current content if modified
+            if (!isChangelogView) {
+                const textarea = document.getElementById('editor-textarea');
+                if (textarea && textarea.value !== originalContent[currentEditorTab]) {
+                    pendingChanges[currentEditorTab] = textarea.value;
+                }
+            }
+            
+            // Update tab styles
+            document.querySelectorAll('.editor-tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('[data-tab="' + tab + '"]').classList.add('active');
+            
+            currentEditorTab = tab;
+            loadEditorContent(tab);
+        }
+
+        async function saveAllChanges() {
+            const status = document.getElementById('editor-status');
+            status.textContent = 'Saving...';
+            status.className = 'editor-status pending';
+            
+            try {
+                // Save current textarea content first
+                if (!isChangelogView) {
+                    const textarea = document.getElementById('editor-textarea');
+                    if (textarea && textarea.value !== originalContent[currentEditorTab]) {
+                        pendingChanges[currentEditorTab] = textarea.value;
+                    }
+                }
+                
+                // Submit each pending change
+                for (const [section, yaml] of Object.entries(pendingChanges)) {
+                    const response = await fetch('/api/config/' + section, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'text/plain' },
+                        body: yaml
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.text();
+                        throw new Error(section + ': ' + error);
+                    }
+                }
+                
+                // Apply all changes
+                const saveResponse = await fetch('/api/config/save', { method: 'POST' });
+                if (!saveResponse.ok) {
+                    throw new Error('Failed to apply changes');
+                }
+                
+                const result = await saveResponse.json();
+                
+                // Clear pending changes and update originals
+                for (const section of Object.keys(pendingChanges)) {
+                    originalContent[section] = pendingChanges[section];
+                }
+                pendingChanges = {};
+                
+                status.textContent = 'Saved! ' + result.changelog?.summary || '';
+                status.className = 'editor-status saved';
+                
+                // Refresh topology
+                init();
+                
+                setTimeout(() => updateEditorUI(), 2000);
+                
+            } catch (error) {
+                status.textContent = 'Error: ' + error.message;
+                status.className = 'editor-status error';
+            }
+        }
+
+        async function discardChanges() {
+            pendingChanges = {};
+            loadEditorContent(currentEditorTab);
+            updateEditorUI();
+            
+            const status = document.getElementById('editor-status');
+            status.textContent = 'Changes discarded';
+            status.className = 'editor-status';
+        }
+
+        async function resetToDefaults() {
+            if (!confirm('Reset all configuration to defaults? This cannot be undone.')) {
+                return;
+            }
+            
+            const status = document.getElementById('editor-status');
+            status.textContent = 'Resetting...';
+            status.className = 'editor-status pending';
+            
+            try {
+                const response = await fetch('/api/config/reset', { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error('Reset failed');
+                }
+                
+                pendingChanges = {};
+                originalContent = {};
+                
+                status.textContent = 'Reset to defaults';
+                status.className = 'editor-status saved';
+                
+                // Reload current tab and topology
+                loadEditorContent(currentEditorTab);
+                init();
+                
+                setTimeout(() => updateEditorUI(), 2000);
+                
+            } catch (error) {
+                status.textContent = 'Error: ' + error.message;
+                status.className = 'editor-status error';
+            }
+        }
+
+        async function renderChangelog() {
+            const content = document.getElementById('editor-content');
+            
+            try {
+                const response = await fetch('/api/config/changelog');
+                const changelog = await response.json();
+                
+                if (!changelog || changelog.length === 0) {
+                    content.innerHTML = '<div class="changelog-panel"><div class="changelog-empty">No changes recorded yet.</div></div>';
+                    return;
+                }
+                
+                let html = '<div class="changelog-panel">';
+                
+                // Reverse to show newest first
+                for (const entry of changelog.slice().reverse()) {
+                    const time = new Date(entry.timestamp).toLocaleString();
+                    html += ` + "`" + `
+                        <div class="changelog-entry">
+                            <div class="changelog-time">${time}</div>
+                            <div class="changelog-summary">${entry.summary}</div>
+                            <div class="changelog-changes">
+                                ${entry.changes.map(c => ` + "`" + `<div class="changelog-change">${c.type}</div>` + "`" + `).join('')}
+                            </div>
+                        </div>
+                    ` + "`" + `;
+                }
+                
+                html += '</div>';
+                content.innerHTML = html;
+                
+            } catch (error) {
+                content.innerHTML = '<div class="changelog-panel"><div class="changelog-empty">Error loading changelog: ' + error.message + '</div></div>';
+            }
+        }
+
+        // Initialize editor on page load
+        function initEditor() {
+            loadEditorContent('services');
+        }
+
         // Initialize once
         init();
+        initEditor();
     </script>
 </body>
 </html>
