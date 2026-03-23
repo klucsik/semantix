@@ -1360,6 +1360,12 @@ const dashboardHTML = `<!DOCTYPE html>
                 document.getElementById('total-links').textContent = data.stats.totalLinks;
                 
                 renderTopology(data);
+                
+                // Auto-select frontend service on initial load
+                const frontend = data.nodes.find(n => n.name === 'frontend');
+                if (frontend) {
+                    showServiceDetail(frontend, data);
+                }
             } catch (error) {
                 console.error('Failed to fetch topology:', error);
                 document.querySelector('.topology-container').innerHTML = '<div style="padding:40px;color:#ff4757;">Error loading topology: ' + error.message + '</div>';
