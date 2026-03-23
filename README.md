@@ -194,30 +194,7 @@ export DT_API_TOKEN="dt0c01.xxx"
 
 Cost: **Free** (e2-micro in us-central1) or ~$6-7/month outside free tier.
 
-### Google Cloud Run
-
-Cloud Run works but requires `--no-cpu-throttling` for continuous simulation:
-
-```bash
-gcloud run deploy semantix \
-  --source . \
-  --region us-central1 \
-  --set-env-vars "DT_ENDPOINT=https://xxx.live.dynatrace.com/api/v2/otlp" \
-  --set-secrets "DT_API_TOKEN=dynatrace-api-token:latest" \
-  --memory 256Mi \
-  --cpu 1 \
-  --min-instances 1 \
-  --max-instances 1 \
-  --no-cpu-throttling
-
-# Or use Cloud Build
-gcloud builds submit --config cloudbuild.yaml \
-  --substitutions=_DT_ENDPOINT="https://xxx.live.dynatrace.com/api/v2/otlp"
-```
-
-Cost: ~$25-50/month (due to always-on CPU requirement).
-
-### Docker (optional)
+### Docker (local)
 
 ```bash
 # Build
