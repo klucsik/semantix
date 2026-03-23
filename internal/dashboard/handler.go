@@ -512,10 +512,44 @@ const dashboardHTML = `<!DOCTYPE html>
             margin-bottom: 24px;
         }
 
+        .panel-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 4px;
+        }
+
         .panel-title {
             font-size: 20px;
             font-weight: 700;
-            margin-bottom: 4px;
+        }
+
+        .view-toggle {
+            display: flex;
+            gap: 4px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 2px;
+        }
+
+        .view-toggle button {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .view-toggle button.active {
+            background: var(--accent-blue);
+            color: var(--bg-primary);
+        }
+
+        .view-toggle button:hover:not(.active) {
+            color: var(--text-primary);
         }
 
         .panel-subtitle {
@@ -603,12 +637,6 @@ const dashboardHTML = `<!DOCTYPE html>
             border-radius: 12px;
             padding: 16px;
             margin-bottom: 12px;
-            transition: all 0.2s ease;
-        }
-
-        .endpoint-card:hover {
-            border-color: var(--accent-blue);
-            transform: translateX(4px);
         }
 
         .endpoint-header {
@@ -790,6 +818,32 @@ const dashboardHTML = `<!DOCTYPE html>
                 transparent 6px,
                 transparent 10px
             );
+        }
+
+        /* YAML View */
+        .yaml-view {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            overflow-x: auto;
+        }
+
+        .yaml-view pre {
+            margin: 0;
+            font-family: 'SF Mono', Menlo, Monaco, monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .yaml-note {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-style: italic;
         }
 
         /* Animations */
@@ -1167,24 +1221,54 @@ const dashboardHTML = `<!DOCTYPE html>
                 <div class="empty-state">
                     <div class="empty-state-icon"></div>
                     <div class="empty-state-title">Select a Service</div>
-                    <div class="empty-state-text">Click on any service node to view detailed telemetry information and endpoint configuration.</div>
+                    <div class="empty-state-text">Click on any service node to view its configuration. This shows what telemetry will be simulated, not live data.</div>
                 </div>
             ` + "`" + `;
         }
 
+        let currentView = 'pretty';
+        let currentService = null;
+        let currentTopology = null;
+
         function showServiceDetail(service, topology) {
+            currentService = service;
+            currentTopology = topology;
+            renderServiceView();
+        }
+
+        function renderServiceView() {
+            const service = currentService;
+            const topology = currentTopology;
+            if (!service) return;
+
             const panel = document.getElementById('detail-panel');
             const maxRpm = Math.max(...topology.nodes.map(n => n.totalRpm), 1);
             
             let html = ` + "`" + `
                 <div class="panel-header">
-                    <div class="panel-title">${service.name}</div>
+                    <div class="panel-title-row">
+                        <div class="panel-title">${service.name}</div>
+                        <div class="view-toggle">
+                            <button onclick="setView('pretty')" class="${currentView === 'pretty' ? 'active' : ''}">Pretty</button>
+                            <button onclick="setView('yaml')" class="${currentView === 'yaml' ? 'active' : ''}">YAML</button>
+                        </div>
+                    </div>
                     <div class="panel-subtitle">${service.version || 'No version'}</div>
                     <div class="service-badge ${service.type}">
                         ${getServiceIcon(service.type)} ${service.system || service.type}
                     </div>
                 </div>
-                
+            ` + "`" + `;
+
+            if (currentView === 'yaml') {
+                html += ` + "`" + `
+                    <div class="yaml-note">Configuration that defines the simulated telemetry:</div>
+                    <div class="yaml-view">
+                        <pre>${generateYaml(service)}</pre>
+                    </div>
+                ` + "`" + `;
+            } else {
+                html += ` + "`" + `
                 <div class="stats-grid">
                     <div class="stat-card">
                         <div class="stat-card-value rpm">${formatNumber(service.totalRpm)}</div>
@@ -1264,7 +1348,74 @@ const dashboardHTML = `<!DOCTYPE html>
             }
 
             html += '</div>';
+            } // end of pretty view
+
             panel.innerHTML = html;
+        }
+
+        function setView(view) {
+            currentView = view;
+            renderServiceView();
+        }
+
+        function generateYaml(service) {
+            let yaml = ` + "`" + `- name: ${service.name}
+  version: ${service.version || 'v1.0.0'}
+  type: ${service.type}` + "`" + `;
+            
+            if (service.system) {
+                yaml += ` + "`" + `\n  system: ${service.system}` + "`" + `;
+            }
+            
+            yaml += ` + "`" + `\n  endpoints:` + "`" + `;
+            
+            for (const ep of service.endpoints) {
+                yaml += ` + "`" + `\n    - name: ${ep.name}
+      type: ${ep.type}` + "`" + `;
+                
+                if (ep.method) yaml += ` + "`" + `\n      method: ${ep.method}` + "`" + `;
+                if (ep.route) yaml += ` + "`" + `\n      route: ${ep.route}` + "`" + `;
+                if (ep.operation) yaml += ` + "`" + `\n      operation: ${ep.operation}` + "`" + `;
+                if (ep.table) yaml += ` + "`" + `\n      table: ${ep.table}` + "`" + `;
+                if (ep.topic) yaml += ` + "`" + `\n      topic: ${ep.topic}` + "`" + `;
+                
+                yaml += ` + "`" + `\n      latency:
+        p50_ms: ${ep.p50Ms}
+        p95_ms: ${ep.p95Ms || ep.p50Ms * 2}
+        p99_ms: ${ep.p99Ms || ep.p50Ms * 4}` + "`" + `;
+                
+                if (ep.rpm > 0) {
+                    yaml += ` + "`" + `\n      traffic:
+        requests_per_minute: ${ep.rpm}` + "`" + `;
+                }
+                
+                if (ep.errorRate > 0) {
+                    yaml += ` + "`" + `\n      errors:
+        rate: ${ep.errorRate}` + "`" + `;
+                    if (ep.errorCodes && ep.errorCodes.length > 0) {
+                        yaml += ` + "`" + `\n        types:` + "`" + `;
+                        for (const code of ep.errorCodes) {
+                            yaml += ` + "`" + `\n          - code: ${code}` + "`" + `;
+                        }
+                    }
+                }
+                
+                if (ep.calls && ep.calls.length > 0) {
+                    yaml += ` + "`" + `\n      calls:` + "`" + `;
+                    for (const call of ep.calls) {
+                        const parts = call.split('.');
+                        yaml += ` + "`" + `\n        - service: ${parts[0]}
+          endpoint: ${parts[1] || 'default'}` + "`" + `;
+                    }
+                }
+                
+                if (ep.hasAnomalies) {
+                    yaml += ` + "`" + `\n      anomalies:
+        - type: latency_spike  # configured` + "`" + `;
+                }
+            }
+            
+            return yaml;
         }
 
         function getServiceIcon(type) {
