@@ -28,7 +28,7 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /semantix /semantix
 
 # Copy example configs (can be overridden with volume mount)
-COPY configs/ /configs/
+COPY configs/examples/ /configs/
 
 # Set default environment variables
 ENV CONFIG_DIR=/configs
