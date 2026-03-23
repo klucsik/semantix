@@ -962,31 +962,31 @@ const dashboardHTML = `<!DOCTYPE html>
             // Clear previous content
             svg.selectAll('*').remove();
 
-            // Create definitions for arrows
+            // Create definitions for arrows (smaller, fixed size)
             const defs = svg.append('defs');
             
             defs.append('marker')
                 .attr('id', 'arrowhead-sync')
-                .attr('viewBox', '-0 -5 10 10')
-                .attr('refX', 20)
+                .attr('viewBox', '0 -3 6 6')
+                .attr('refX', 5)
                 .attr('refY', 0)
                 .attr('orient', 'auto')
-                .attr('markerWidth', 8)
-                .attr('markerHeight', 8)
+                .attr('markerWidth', 6)
+                .attr('markerHeight', 6)
                 .append('path')
-                .attr('d', 'M 0,-5 L 10,0 L 0,5')
+                .attr('d', 'M 0,-3 L 6,0 L 0,3')
                 .attr('fill', 'var(--accent-blue)');
 
             defs.append('marker')
                 .attr('id', 'arrowhead-async')
-                .attr('viewBox', '-0 -5 10 10')
-                .attr('refX', 20)
+                .attr('viewBox', '0 -3 6 6')
+                .attr('refX', 5)
                 .attr('refY', 0)
                 .attr('orient', 'auto')
-                .attr('markerWidth', 8)
-                .attr('markerHeight', 8)
+                .attr('markerWidth', 6)
+                .attr('markerHeight', 6)
                 .append('path')
-                .attr('d', 'M 0,-5 L 10,0 L 0,5')
+                .attr('d', 'M 0,-3 L 6,0 L 0,3')
                 .attr('fill', 'var(--accent-orange)');
 
             const g = svg.append('g');
@@ -1058,25 +1058,9 @@ const dashboardHTML = `<!DOCTYPE html>
                 rpm: l.rpm
             }));
 
-            // Create links (curved paths)
-            const link = g.append('g')
-                .selectAll('path')
-                .data(linkData)
-                .join('path')
-                .attr('class', d => 'link ' + d.type)
-                .attr('marker-end', d => 'url(#arrowhead-' + d.type + ')')
-                .attr('d', d => {
-                    const sx = d.source.x;
-                    const sy = d.source.y;
-                    const tx = d.target.x;
-                    const ty = d.target.y;
-                    // Curved path
-                    const midY = (sy + ty) / 2;
-                    return 'M ' + sx + ' ' + sy + ' C ' + sx + ' ' + midY + ', ' + tx + ' ' + midY + ', ' + tx + ' ' + ty;
-                });
-
-            // Create nodes
+            // Create nodes FIRST (so links render on top)
             const node = g.append('g')
+                .attr('class', 'nodes-layer')
                 .selectAll('g')
                 .data(data.nodes)
                 .join('g')
@@ -1128,6 +1112,24 @@ const dashboardHTML = `<!DOCTYPE html>
                 .attr('x', 50)
                 .attr('y', -25)
                 .text('!');
+
+            // Create links AFTER nodes (curved paths that connect to node edges)
+            const link = g.append('g')
+                .attr('class', 'links-layer')
+                .selectAll('path')
+                .data(linkData)
+                .join('path')
+                .attr('class', d => 'link ' + d.type)
+                .attr('marker-end', d => 'url(#arrowhead-' + d.type + ')')
+                .attr('d', d => {
+                    const sx = d.source.x;
+                    const sy = d.source.y + 40;  // Bottom of source node
+                    const tx = d.target.x;
+                    const ty = d.target.y - 40;  // Top of target node
+                    // Curved path
+                    const midY = (sy + ty) / 2;
+                    return 'M ' + sx + ' ' + sy + ' C ' + sx + ' ' + midY + ', ' + tx + ' ' + midY + ', ' + tx + ' ' + ty;
+                });
 
             // Click handler for nodes
             node.on('click', function(event, d) {
