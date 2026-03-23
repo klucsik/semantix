@@ -504,6 +504,11 @@ const dashboardHTML = `<!DOCTYPE html>
     <title>Semantix - Telemetry Simulation Dashboard</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔭</text></svg>">
     <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- CodeMirror for YAML syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/yaml/yaml.min.js"></script>
     <style>
         :root {
             --bg-primary: #0a0e14;
@@ -751,6 +756,23 @@ const dashboardHTML = `<!DOCTYPE html>
             color: var(--bg-primary);
         }
 
+        .jump-to-yaml-btn {
+            background: var(--accent-blue);
+            color: var(--bg-primary);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: var(--font-sans);
+            transition: all 0.2s;
+        }
+
+        .jump-to-yaml-btn:hover {
+            background: #79b8ff;
+        }
+
         .panel-subtitle {
             font-size: 0.75rem;
             color: var(--text-muted);
@@ -974,36 +996,6 @@ const dashboardHTML = `<!DOCTYPE html>
             );
         }
 
-        /* YAML View */
-        .yaml-view {
-            background: rgba(0,0,0,0.3);
-            border: 1px solid var(--border-subtle);
-            border-radius: 6px;
-            padding: 1rem;
-            overflow-x: auto;
-        }
-
-        .yaml-view pre {
-            margin: 0;
-            font-family: var(--font-mono);
-            font-size: 0.75rem;
-            line-height: 1.6;
-            color: var(--text-secondary);
-        }
-
-        .yaml-note {
-            font-size: 0.7rem;
-            color: var(--text-muted);
-            margin-bottom: 0.75rem;
-            font-style: italic;
-        }
-
-        /* YAML syntax highlighting */
-        .yaml-key { color: var(--accent-blue); }
-        .yaml-string { color: var(--accent-green); }
-        .yaml-number { color: var(--accent-orange); }
-        .yaml-comment { color: var(--text-muted); font-style: italic; }
-
         /* Volume Bar */
         .volume-bar {
             height: 3px;
@@ -1101,19 +1093,68 @@ const dashboardHTML = `<!DOCTYPE html>
             background: rgba(0,0,0,0.4);
         }
 
+        /* CodeMirror customization */
+        .CodeMirror {
+            flex: 1;
+            height: auto !important;
+            background: rgba(0,0,0,0.3);
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            line-height: 1.6;
+        }
+
+        .CodeMirror-focused {
+            background: rgba(0,0,0,0.4);
+        }
+
+        .CodeMirror-gutters {
+            background: rgba(0,0,0,0.2);
+            border-right: 1px solid var(--border);
+        }
+
+        .CodeMirror-linenumber {
+            color: var(--text-muted);
+        }
+
+        .CodeMirror-cursor {
+            border-left: 1px solid var(--accent-blue);
+        }
+
+        .CodeMirror-selected {
+            background: rgba(88, 166, 255, 0.2) !important;
+        }
+
+        .cm-s-material-darker .cm-atom { color: var(--accent-orange); }
+        .cm-s-material-darker .cm-number { color: var(--accent-orange); }
+        .cm-s-material-darker .cm-keyword { color: var(--accent-purple); }
+        .cm-s-material-darker .cm-string { color: var(--accent-green); }
+        .cm-s-material-darker .cm-comment { color: var(--text-muted); }
+        .cm-s-material-darker .cm-meta { color: var(--accent-blue); }
+
+        #editor-container {
+            flex: 1;
+            overflow: hidden;
+        }
+
+        #editor-container .CodeMirror {
+            height: 100%;
+        }
+
         .editor-toolbar {
             display: flex;
-            gap: 0.5rem;
-            padding: 0.75rem 1rem;
+            gap: 0.75rem;
+            padding: 1rem 1.25rem;
             border-top: 1px solid var(--border);
-            background: var(--bg-glass);
+            background: rgba(22, 27, 34, 0.95);
             align-items: center;
+            flex-shrink: 0;
         }
 
         .editor-btn {
-            padding: 0.5rem 1rem;
-            font-size: 0.75rem;
-            border-radius: 4px;
+            padding: 0.6rem 1.25rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            border-radius: 6px;
             cursor: pointer;
             font-family: var(--font-sans);
             transition: all 0.2s;
@@ -1293,7 +1334,7 @@ const dashboardHTML = `<!DOCTYPE html>
                 <button class="editor-tab" data-tab="changelog" onclick="switchEditorTab('changelog')">Changelog</button>
             </div>
             <div class="editor-content" id="editor-content">
-                <textarea class="editor-textarea" id="editor-textarea" placeholder="Loading configuration..."></textarea>
+                <div id="editor-container"></div>
             </div>
             <div class="editor-toolbar">
                 <button class="editor-btn editor-btn-primary" id="save-btn" onclick="saveAllChanges()" disabled>Save All</button>
@@ -1566,7 +1607,6 @@ const dashboardHTML = `<!DOCTYPE html>
             ` + "`" + `;
         }
 
-        let currentView = 'pretty';
         let currentService = null;
         let currentTopology = null;
 
@@ -1588,10 +1628,7 @@ const dashboardHTML = `<!DOCTYPE html>
                 <div class="panel-header">
                     <div class="panel-title-row">
                         <div class="panel-title">${service.name}</div>
-                        <div class="view-toggle">
-                            <button onclick="setView('pretty')" class="${currentView === 'pretty' ? 'active' : ''}">Pretty</button>
-                            <button onclick="setView('yaml')" class="${currentView === 'yaml' ? 'active' : ''}">YAML</button>
-                        </div>
+                        <button class="jump-to-yaml-btn" onclick="jumpToServiceYaml('${service.name}')">Edit YAML</button>
                     </div>
                     <div class="panel-subtitle">${service.version || 'No version'}</div>
                     <div class="service-badge ${service.type}">
@@ -1600,15 +1637,7 @@ const dashboardHTML = `<!DOCTYPE html>
                 </div>
             ` + "`" + `;
 
-            if (currentView === 'yaml') {
-                html += ` + "`" + `
-                    <div class="yaml-note">Configuration that defines the simulated telemetry:</div>
-                    <div class="yaml-view">
-                        <pre>${generateYaml(service)}</pre>
-                    </div>
-                ` + "`" + `;
-            } else {
-                html += ` + "`" + `
+            html += ` + "`" + `
                 <div class="stats-grid">
                     <div class="stat-card">
                         <div class="stat-card-value rpm">${formatNumber(service.totalRpm)}</div>
@@ -1688,82 +1717,43 @@ const dashboardHTML = `<!DOCTYPE html>
             }
 
             html += '</div>';
-            } // end of pretty view
 
             panel.innerHTML = html;
         }
 
-        function setView(view) {
-            currentView = view;
-            renderServiceView();
-        }
-
-        function generateYaml(service) {
-            // Helper functions for syntax highlighting
-            const key = (k) => '<span class="yaml-key">' + k + '</span>';
-            const str = (s) => '<span class="yaml-string">' + s + '</span>';
-            const num = (n) => '<span class="yaml-number">' + n + '</span>';
-            const comment = (c) => '<span class="yaml-comment">' + c + '</span>';
-            
-            let lines = [];
-            
-            lines.push('- ' + key('name:') + ' ' + str(service.name));
-            lines.push('  ' + key('version:') + ' ' + str(service.version || 'v1.0.0'));
-            lines.push('  ' + key('type:') + ' ' + str(service.type));
-            
-            if (service.system) {
-                lines.push('  ' + key('system:') + ' ' + str(service.system));
+        function jumpToServiceYaml(serviceName) {
+            // Switch to Services tab if not already there
+            if (currentEditorTab !== 'services') {
+                switchEditorTab('services');
             }
             
-            lines.push('  ' + key('endpoints:'));
-            
-            for (const ep of service.endpoints) {
-                lines.push('    - ' + key('name:') + ' ' + str(ep.name));
-                lines.push('      ' + key('type:') + ' ' + str(ep.type));
+            // Wait a moment for editor to load if switching tabs
+            setTimeout(() => {
+                if (!cmEditor) return;
                 
-                if (ep.method) lines.push('      ' + key('method:') + ' ' + str(ep.method));
-                if (ep.route) lines.push('      ' + key('route:') + ' ' + str(ep.route));
-                if (ep.operation) lines.push('      ' + key('operation:') + ' ' + str(ep.operation));
-                if (ep.table) lines.push('      ' + key('table:') + ' ' + str(ep.table));
-                if (ep.topic) lines.push('      ' + key('topic:') + ' ' + str(ep.topic));
+                // Search for the service name in the YAML
+                const content = cmEditor.getValue();
+                const lines = content.split('\n');
                 
-                lines.push('      ' + key('latency:'));
-                lines.push('        ' + key('p50_ms:') + ' ' + num(ep.p50Ms));
-                lines.push('        ' + key('p95_ms:') + ' ' + num(ep.p95Ms || ep.p50Ms * 2));
-                lines.push('        ' + key('p99_ms:') + ' ' + num(ep.p99Ms || ep.p50Ms * 4));
-                
-                if (ep.rpm > 0) {
-                    lines.push('      ' + key('traffic:'));
-                    lines.push('        ' + key('requests_per_minute:') + ' ' + num(ep.rpm));
-                }
-                
-                if (ep.errorRate > 0) {
-                    lines.push('      ' + key('errors:'));
-                    lines.push('        ' + key('rate:') + ' ' + num(ep.errorRate));
-                    if (ep.errorCodes && ep.errorCodes.length > 0) {
-                        lines.push('        ' + key('types:'));
-                        for (const code of ep.errorCodes) {
-                            lines.push('          - ' + key('code:') + ' ' + num(code));
-                        }
+                // Look for "- name: serviceName" or "name: serviceName"
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    if (line.match(new RegExp('[-\\s]*name:\\s*["\']?' + serviceName + '["\']?\\s*$', 'i')) ||
+                        line.match(new RegExp('^\\s*-\\s*name:\\s*["\']?' + serviceName + '["\']?', 'i'))) {
+                        // Found the service, scroll to it and highlight
+                        cmEditor.setCursor(i, 0);
+                        cmEditor.scrollIntoView({line: i, ch: 0}, 100);
+                        
+                        // Select the entire service block for visibility
+                        cmEditor.setSelection({line: i, ch: 0}, {line: i, ch: lines[i].length});
+                        cmEditor.focus();
+                        return;
                     }
                 }
                 
-                if (ep.calls && ep.calls.length > 0) {
-                    lines.push('      ' + key('calls:'));
-                    for (const call of ep.calls) {
-                        const parts = call.split('.');
-                        lines.push('        - ' + key('service:') + ' ' + str(parts[0]));
-                        lines.push('          ' + key('endpoint:') + ' ' + str(parts[1] || 'default'));
-                    }
-                }
-                
-                if (ep.hasAnomalies) {
-                    lines.push('      ' + key('anomalies:'));
-                    lines.push('        - ' + key('type:') + ' ' + str('latency_spike') + '  ' + comment('# configured'));
-                }
-            }
-            
-            return lines.join('\n');
+                // Fallback: just focus the editor
+                cmEditor.focus();
+            }, currentEditorTab !== 'services' ? 200 : 50);
         }
 
         function getServiceIcon(type) {
@@ -1785,40 +1775,61 @@ const dashboardHTML = `<!DOCTYPE html>
         let originalContent = {};
         let pendingChanges = {};
         let isChangelogView = false;
+        let cmEditor = null;
 
         async function loadEditorContent(tab) {
-            const textarea = document.getElementById('editor-textarea');
             const content = document.getElementById('editor-content');
             
             if (tab === 'changelog') {
                 isChangelogView = true;
+                if (cmEditor) {
+                    cmEditor.toTextArea();
+                    cmEditor = null;
+                }
                 await renderChangelog();
                 return;
             }
             
             isChangelogView = false;
-            content.innerHTML = '<textarea class="editor-textarea" id="editor-textarea" placeholder="Loading..."></textarea>';
+            content.innerHTML = '<div id="editor-container"></div>';
             
             try {
                 const response = await fetch('/api/config/' + tab);
                 const yaml = await response.text();
                 originalContent[tab] = yaml;
                 
-                const newTextarea = document.getElementById('editor-textarea');
                 // Show pending change if exists, otherwise show original
-                newTextarea.value = pendingChanges[tab] !== undefined ? pendingChanges[tab] : yaml;
+                const initialValue = pendingChanges[tab] !== undefined ? pendingChanges[tab] : yaml;
+                
+                // Create CodeMirror instance
+                const container = document.getElementById('editor-container');
+                cmEditor = CodeMirror(container, {
+                    value: initialValue,
+                    mode: 'yaml',
+                    theme: 'material-darker',
+                    lineNumbers: true,
+                    indentUnit: 2,
+                    tabSize: 2,
+                    indentWithTabs: false,
+                    lineWrapping: true,
+                    autofocus: true
+                });
                 
                 // Listen for changes
-                newTextarea.addEventListener('input', () => onEditorChange(tab));
+                cmEditor.on('change', () => onEditorChange(tab));
+                
+                // Ensure CodeMirror fills the container
+                cmEditor.setSize('100%', '100%');
+                
             } catch (error) {
                 console.error('Failed to load config:', error);
-                document.getElementById('editor-textarea').value = '# Error loading configuration: ' + error.message;
+                content.innerHTML = '<div style="padding: 1rem; color: var(--accent-red);"># Error loading configuration: ' + error.message + '</div>';
             }
         }
 
         function onEditorChange(tab) {
-            const textarea = document.getElementById('editor-textarea');
-            const newValue = textarea.value;
+            if (!cmEditor) return;
+            const newValue = cmEditor.getValue();
             
             // Check if changed from original
             if (newValue !== originalContent[tab]) {
@@ -1859,10 +1870,10 @@ const dashboardHTML = `<!DOCTYPE html>
 
         function switchEditorTab(tab) {
             // Save current content if modified
-            if (!isChangelogView) {
-                const textarea = document.getElementById('editor-textarea');
-                if (textarea && textarea.value !== originalContent[currentEditorTab]) {
-                    pendingChanges[currentEditorTab] = textarea.value;
+            if (!isChangelogView && cmEditor) {
+                const currentValue = cmEditor.getValue();
+                if (currentValue !== originalContent[currentEditorTab]) {
+                    pendingChanges[currentEditorTab] = currentValue;
                 }
             }
             
@@ -1880,11 +1891,11 @@ const dashboardHTML = `<!DOCTYPE html>
             status.className = 'editor-status pending';
             
             try {
-                // Save current textarea content first
-                if (!isChangelogView) {
-                    const textarea = document.getElementById('editor-textarea');
-                    if (textarea && textarea.value !== originalContent[currentEditorTab]) {
-                        pendingChanges[currentEditorTab] = textarea.value;
+                // Save current editor content first
+                if (!isChangelogView && cmEditor) {
+                    const currentValue = cmEditor.getValue();
+                    if (currentValue !== originalContent[currentEditorTab]) {
+                        pendingChanges[currentEditorTab] = currentValue;
                     }
                 }
                 
