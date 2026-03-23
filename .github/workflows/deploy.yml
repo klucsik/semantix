@@ -16,6 +16,7 @@ env:
   MACHINE_TYPE: e2-micro
   IMAGE_NAME: semantix
   STATIC_IP_NAME: semantix-ip
+  DOMAIN: semantix.mreider.com
 
 jobs:
   deploy:
@@ -61,12 +62,12 @@ jobs:
       - name: Ensure static IP exists
         id: static_ip
         run: |
-          REGION="${{ secrets.GCP_ZONE }}"
-          if [ -z "$REGION" ]; then
-            REGION="us-central1-a"
+          ZONE="${{ secrets.GCP_ZONE }}"
+          if [ -z "$ZONE" ]; then
+            ZONE="us-central1-a"
           fi
           # Extract region from zone (e.g., us-central1-a -> us-central1)
-          REGION="${REGION%-*}"
+          REGION="${ZONE%-*}"
           
           # Check if static IP exists, create if not
           if ! gcloud compute addresses describe "${{ env.STATIC_IP_NAME }}" \
@@ -86,32 +87,107 @@ jobs:
           
           echo "static_ip=$STATIC_IP" >> $GITHUB_OUTPUT
           echo "region=$REGION" >> $GITHUB_OUTPUT
+          echo "zone=$ZONE" >> $GITHUB_OUTPUT
           echo "Static IP: $STATIC_IP"
+
+      - name: Ensure firewall rules exist
+        run: |
+          # HTTP/HTTPS firewall rule
+          if ! gcloud compute firewall-rules describe allow-semantix-https \
+              --project="${{ secrets.GCP_PROJECT_ID }}" &>/dev/null; then
+            gcloud compute firewall-rules create allow-semantix-https \
+              --project="${{ secrets.GCP_PROJECT_ID }}" \
+              --allow="tcp:80,tcp:443" \
+              --target-tags="https-server" \
+              --description="Allow HTTP/HTTPS access to Semantix"
+          fi
 
       - name: Deploy to GCE
         run: |
-          ZONE="${{ secrets.GCP_ZONE }}"
-          if [ -z "$ZONE" ]; then
-            ZONE="us-central1-a"
-          fi
+          ZONE="${{ steps.static_ip.outputs.zone }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          # Create startup script
+          cat > /tmp/startup-script.sh << 'STARTUP_EOF'
+          #!/bin/bash
+          set -e
+          
+          # Get metadata
+          get_metadata() {
+              curl -sf "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1" -H "Metadata-Flavor: Google" || echo ""
+          }
+          
+          export GCP_PROJECT_ID=$(curl -sf "http://metadata.google.internal/computeMetadata/v1/project/project-id" -H "Metadata-Flavor: Google")
+          export DT_ENDPOINT=$(get_metadata "DT_ENDPOINT")
+          export DT_API_TOKEN=$(get_metadata "DT_API_TOKEN")
+          export VERSION=$(get_metadata "VERSION")
+          export DOMAIN=$(get_metadata "DOMAIN")
+          
+          # Authenticate to GCR
+          docker-credential-gcr configure-docker --registries=gcr.io
+          
+          # Create network
+          docker network create semantix-net 2>/dev/null || true
+          
+          # Stop and remove existing containers
+          docker stop semantix caddy 2>/dev/null || true
+          docker rm semantix caddy 2>/dev/null || true
+          
+          # Create volumes for Caddy (persists certs)
+          docker volume create caddy_data 2>/dev/null || true
+          docker volume create caddy_config 2>/dev/null || true
+          
+          # Pull images
+          docker pull "gcr.io/${GCP_PROJECT_ID}/semantix:${VERSION}"
+          docker pull caddy:2-alpine
+          
+          # Start semantix
+          docker run -d \
+              --name semantix \
+              --network semantix-net \
+              --restart always \
+              -e "DT_ENDPOINT=${DT_ENDPOINT}" \
+              -e "DT_API_TOKEN=${DT_API_TOKEN}" \
+              -e "VERSION=${VERSION}" \
+              "gcr.io/${GCP_PROJECT_ID}/semantix:${VERSION}"
+          
+          # Start caddy with automatic HTTPS
+          docker run -d \
+              --name caddy \
+              --network semantix-net \
+              --restart always \
+              -p 80:80 \
+              -p 443:443 \
+              -v caddy_data:/data \
+              -v caddy_config:/config \
+              caddy:2-alpine \
+              caddy reverse-proxy --from "${DOMAIN}" --to semantix:8080
+          
+          echo "Startup complete: https://${DOMAIN}"
+          STARTUP_EOF
           
           # Check if instance exists
           if gcloud compute instances describe "${{ env.INSTANCE_NAME }}" \
               --zone="$ZONE" \
               --project="${{ secrets.GCP_PROJECT_ID }}" &>/dev/null; then
-            echo "Instance exists, updating container..."
+            echo "Instance exists, updating metadata and restarting..."
             
-            # Update the container image on existing instance
-            gcloud compute instances update-container "${{ env.INSTANCE_NAME }}" \
+            # Update metadata (triggers startup script on reboot)
+            gcloud compute instances add-metadata "${{ env.INSTANCE_NAME }}" \
               --zone="$ZONE" \
               --project="${{ secrets.GCP_PROJECT_ID }}" \
-              --container-image="gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" \
-              --container-env="DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},DT_API_TOKEN=${{ secrets.DT_API_TOKEN }},VERSION=${{ steps.version.outputs.version }}"
+              --metadata="VERSION=$VERSION"
+            
+            # SSH and run the deployment directly
+            gcloud compute ssh "${{ env.INSTANCE_NAME }}" \
+              --zone="$ZONE" \
+              --project="${{ secrets.GCP_PROJECT_ID }}" \
+              --command="$(cat /tmp/startup-script.sh)"
           else
             echo "Creating new instance with static IP..."
             
-            # Create new instance with Container-Optimized OS and static IP
-            gcloud compute instances create-with-container "${{ env.INSTANCE_NAME }}" \
+            # Create new instance with COS
+            gcloud compute instances create "${{ env.INSTANCE_NAME }}" \
               --project="${{ secrets.GCP_PROJECT_ID }}" \
               --zone="$ZONE" \
               --machine-type="${{ env.MACHINE_TYPE }}" \
@@ -119,50 +195,43 @@ jobs:
               --image-project="cos-cloud" \
               --boot-disk-size="10GB" \
               --boot-disk-type="pd-standard" \
-              --container-image="gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" \
-              --container-env="DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},DT_API_TOKEN=${{ secrets.DT_API_TOKEN }},VERSION=${{ steps.version.outputs.version }}" \
-              --container-restart-policy="always" \
-              --tags="http-server" \
+              --tags="https-server" \
               --address="${{ steps.static_ip.outputs.static_ip }}" \
+              --metadata="DT_ENDPOINT=${{ secrets.DT_ENDPOINT }},DT_API_TOKEN=${{ secrets.DT_API_TOKEN }},VERSION=$VERSION,DOMAIN=${{ env.DOMAIN }}" \
+              --metadata-from-file="startup-script=/tmp/startup-script.sh" \
               --scopes="https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
-            
-            # Create firewall rule if it doesn't exist
-            if ! gcloud compute firewall-rules describe allow-semantix-http \
-                --project="${{ secrets.GCP_PROJECT_ID }}" &>/dev/null; then
-              gcloud compute firewall-rules create allow-semantix-http \
-                --project="${{ secrets.GCP_PROJECT_ID }}" \
-                --allow="tcp:8080" \
-                --target-tags="http-server" \
-                --description="Allow HTTP access to Semantix dashboard"
-            fi
           fi
 
       - name: Get instance IP and verify
         id: verify
         run: |
-          # Use the static IP
           EXTERNAL_IP="${{ steps.static_ip.outputs.static_ip }}"
           
           echo "external_ip=$EXTERNAL_IP" >> $GITHUB_OUTPUT
-          echo "Dashboard URL: http://$EXTERNAL_IP:8080"
+          echo "Dashboard URL: https://${{ env.DOMAIN }}"
           
-          # Wait for container to start
-          echo "Waiting for container to start..."
-          sleep 30
+          # Wait for containers to start
+          echo "Waiting for containers to start..."
+          sleep 45
           
-          # Health check
+          # Health check (try HTTPS first, fall back to HTTP)
           echo "Checking health endpoint..."
-          for i in {1..5}; do
-            if curl -sf "http://$EXTERNAL_IP:8080/health" --max-time 10; then
+          for i in {1..6}; do
+            if curl -sf "https://${{ env.DOMAIN }}/health" --max-time 10 2>/dev/null; then
               echo ""
-              echo "Health check passed!"
+              echo "HTTPS health check passed!"
               exit 0
             fi
-            echo "Attempt $i failed, retrying in 10s..."
-            sleep 10
+            if curl -sf "http://$EXTERNAL_IP:8080/health" --max-time 10 2>/dev/null; then
+              echo ""
+              echo "HTTP health check passed (HTTPS may still be provisioning cert)!"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 15s..."
+            sleep 15
           done
           
-          echo "Health check failed after 5 attempts"
+          echo "Health check failed after 6 attempts"
           exit 1
 
       - name: Deployment summary
@@ -171,6 +240,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Instance**: ${{ env.INSTANCE_NAME }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Dashboard**: http://${{ steps.verify.outputs.external_ip }}:8080" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dashboard**: https://${{ env.DOMAIN }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **IP**: ${{ steps.verify.outputs.external_ip }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This IP is static and will not change between deployments." >> $GITHUB_STEP_SUMMARY
+          echo "HTTPS with automatic Let's Encrypt certificate." >> $GITHUB_STEP_SUMMARY

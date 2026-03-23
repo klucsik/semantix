@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=${DOMAIN:-semantix.mreider.com}
+    command: caddy reverse-proxy --from ${DOMAIN:-semantix.mreider.com} --to semantix:8080
+    depends_on:
+      - semantix
+
+  semantix:
+    image: gcr.io/${GCP_PROJECT_ID}/semantix:latest
+    restart: always
+    environment:
+      - DT_ENDPOINT=${DT_ENDPOINT}
+      - DT_API_TOKEN=${DT_API_TOKEN}
+      - VERSION=${VERSION:-latest}
+    # Port 8080 is exposed internally to caddy, not to host
+
+volumes:
+  caddy_data:
+  caddy_config:
