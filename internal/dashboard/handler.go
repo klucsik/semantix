@@ -386,6 +386,8 @@ const dashboardHTML = `<!DOCTYPE html>
         .topology-container {
             position: relative;
             overflow: hidden;
+            height: 100%;
+            min-height: 500px;
             background: 
                 radial-gradient(ellipse at 50% 0%, rgba(0, 180, 216, 0.08) 0%, transparent 50%),
                 radial-gradient(ellipse at 80% 80%, rgba(155, 93, 229, 0.05) 0%, transparent 40%);
@@ -394,6 +396,7 @@ const dashboardHTML = `<!DOCTYPE html>
         #topology {
             width: 100%;
             height: 100%;
+            min-height: 500px;
         }
 
         /* Service Nodes */
@@ -898,8 +901,10 @@ const dashboardHTML = `<!DOCTYPE html>
         // Fetch topology data and render
         async function init() {
             try {
+                console.log('Initializing dashboard...');
                 const response = await fetch('/api/topology');
                 const data = await response.json();
+                console.log('Topology data:', data);
                 
                 // Update header stats
                 document.getElementById('total-services').textContent = data.stats.totalServices;
@@ -909,6 +914,7 @@ const dashboardHTML = `<!DOCTYPE html>
                 renderTopology(data);
             } catch (error) {
                 console.error('Failed to fetch topology:', error);
+                document.querySelector('.topology-container').innerHTML = '<div style="padding:40px;color:#ff4757;">Error loading topology: ' + error.message + '</div>';
             }
         }
 
@@ -931,9 +937,12 @@ const dashboardHTML = `<!DOCTYPE html>
         }
 
         function renderTopology(data) {
+            console.log('Rendering topology...');
             const svg = d3.select('#topology');
             const container = document.querySelector('.topology-container');
             const width = container.clientWidth;
+            const height = container.clientHeight;
+            console.log('Container dimensions:', width, height);
             const height = container.clientHeight;
 
             svg.attr('width', width).attr('height', height);
