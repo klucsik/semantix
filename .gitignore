@@ -1,0 +1,58 @@
+# Secrets - NEVER commit these
+.env
+.env.*
+.env.local
+*.key
+*.pem
+*.p12
+credentials.json
+credentials.yaml
+secrets.yaml
+secrets.json
+**/secret*
+**/*token*
+**/*credential*
+
+# Build artifacts
+/semantix
+/bin/
+/dist/
+/out/
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+
+# Go
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+coverage.html
+go.work
+
+# Test artifacts
+*.log
+*.tmp
+/tmp/
+
+# Debug
+__debug_bin*

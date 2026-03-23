@@ -1,0 +1,78 @@
+# Semantix Minimal Example
+# A simple 2-service configuration for quick testing.
+
+version: "1.0"
+
+simulation:
+  duration: "infinite"
+  tick_interval: "100ms"
+
+exporter:
+  endpoint: "${DT_ENDPOINT:-http://localhost:4318}"
+  token: "${DT_API_TOKEN:-}"
+  protocol: "http/protobuf"
+
+global_resource_attributes:
+  deployment.environment: "development"
+  service.namespace: "minimal-demo"
+
+services:
+  # API Gateway - receives external traffic
+  - name: "api-gateway"
+    version: "1.0.0"
+    endpoints:
+      - name: "health"
+        type: "http.server"
+        method: "GET"
+        route: "/health"
+        traffic:
+          requests_per_minute: 30
+        latency:
+          distribution: "normal"
+          p50_ms: 5
+          p95_ms: 15
+          p99_ms: 30
+        errors:
+          rate: 0.0
+
+      - name: "get_users"
+        type: "http.server"
+        method: "GET"
+        route: "/api/users"
+        traffic:
+          requests_per_minute: 60
+        latency:
+          distribution: "log_normal"
+          p50_ms: 25
+          p95_ms: 100
+          p99_ms: 250
+        errors:
+          rate: 0.01
+          types:
+            - code: 500
+              message: "Internal Server Error"
+              weight: 1.0
+        calls:
+          - service: "user-service"
+            endpoint: "list_users"
+            probability: 1.0
+
+  # User Service - backend service
+  - name: "user-service"
+    version: "1.0.0"
+    endpoints:
+      - name: "list_users"
+        type: "http.server"
+        method: "GET"
+        route: "/users"
+        latency:
+          distribution: "normal"
+          p50_ms: 15
+          p95_ms: 50
+          p99_ms: 100
+        errors:
+          rate: 0.005
+          types:
+            - code: 503
+              message: "Database connection timeout"
+              weight: 1.0

@@ -1,0 +1,396 @@
+# Semantix E-commerce Example
+# This configuration simulates a Fabrik-like e-commerce application
+# with microservices, Kafka messaging, and PostgreSQL database.
+
+version: "1.0"
+
+simulation:
+  duration: "infinite"
+  tick_interval: "50ms"
+  seed: 42
+
+exporter:
+  endpoint: "${DT_ENDPOINT:-http://localhost:4318}"
+  token: "${DT_API_TOKEN:-}"
+  protocol: "http/protobuf"
+
+global_resource_attributes:
+  deployment.environment: "production"
+  cloud.provider: "gcp"
+  cloud.region: "us-central1"
+  service.namespace: "ecommerce"
+
+services:
+  # Frontend - Web gateway handling checkout requests
+  - name: "frontend"
+    version: "2.1.0"
+    resource_attributes:
+      k8s.deployment.name: "frontend"
+      k8s.namespace.name: "ecommerce"
+    endpoints:
+      - name: "checkout"
+        type: "http.server"
+        method: "POST"
+        route: "/api/v1/checkout"
+        traffic:
+          requests_per_minute: 60
+          burst_probability: 0.1
+          burst_multiplier: 3
+        latency:
+          distribution: "log_normal"
+          p50_ms: 45
+          p95_ms: 180
+          p99_ms: 450
+        errors:
+          rate: 0.02
+          types:
+            - code: 500
+              message: "Internal Server Error"
+              exception: "java.lang.RuntimeException"
+              weight: 0.7
+            - code: 503
+              message: "Service Unavailable"
+              exception: "java.net.ConnectException"
+              weight: 0.3
+        calls:
+          - service: "orders"
+            endpoint: "create_order"
+          - service: "inventory"
+            endpoint: "check_stock"
+            parallel: true
+
+      - name: "get_dashboard"
+        type: "http.server"
+        method: "GET"
+        route: "/api/v1/dashboard"
+        traffic:
+          requests_per_minute: 120
+          burst_probability: 0.05
+          burst_multiplier: 2
+        latency:
+          distribution: "normal"
+          p50_ms: 25
+          p95_ms: 80
+        calls:
+          - service: "postgres"
+            endpoint: "select_orders"
+
+  # Orders Service - Creates orders and publishes to Kafka
+  - name: "orders"
+    version: "1.5.2"
+    resource_attributes:
+      k8s.deployment.name: "orders"
+      k8s.namespace.name: "ecommerce"
+    endpoints:
+      - name: "create_order"
+        type: "http.server"
+        method: "POST"
+        route: "/api/orders"
+        latency:
+          distribution: "normal"
+          p50_ms: 30
+          p95_ms: 80
+        errors:
+          rate: 0.01
+          types:
+            - code: 400
+              message: "Invalid order data"
+              weight: 0.5
+            - code: 500
+              message: "Failed to create order"
+              exception: "org.springframework.dao.DataAccessException"
+              weight: 0.5
+        calls:
+          - service: "postgres"
+            endpoint: "insert_order"
+          - service: "kafka"
+            endpoint: "publish_order"
+            type: "messaging"
+            async: true
+
+  # Inventory Service - Manages stock levels
+  - name: "inventory"
+    version: "1.3.0"
+    resource_attributes:
+      k8s.deployment.name: "inventory"
+      k8s.namespace.name: "ecommerce"
+    endpoints:
+      - name: "check_stock"
+        type: "http.server"
+        method: "GET"
+        route: "/api/inventory/check"
+        latency:
+          distribution: "normal"
+          p50_ms: 15
+          p95_ms: 50
+        calls:
+          - service: "postgres"
+            endpoint: "select_inventory"
+
+      - name: "reserve_stock"
+        type: "http.server"
+        method: "POST"
+        route: "/api/inventory/reserve"
+        latency:
+          distribution: "normal"
+          p50_ms: 20
+          p95_ms: 60
+        calls:
+          - service: "postgres"
+            endpoint: "update_inventory"
+
+  # Fulfillment Service - Processes orders from Kafka
+  - name: "fulfillment"
+    version: "1.2.0"
+    resource_attributes:
+      k8s.deployment.name: "fulfillment"
+      k8s.namespace.name: "ecommerce"
+    endpoints:
+      - name: "process_order"
+        type: "messaging.consumer"
+        topic: "orders"
+        latency:
+          distribution: "log_normal"
+          p50_ms: 200
+          p95_ms: 800
+          p99_ms: 2000
+        errors:
+          rate: 0.03
+          types:
+            - code: 500
+              message: "Fraud check failed"
+              exception: "com.ecommerce.FraudDetectionException"
+              weight: 0.4
+            - code: 500
+              message: "Order validation failed"
+              weight: 0.6
+        calls:
+          - service: "postgres"
+            endpoint: "update_order_status"
+        anomalies:
+          - type: "latency_spike"
+            probability: 0.05
+            multiplier: 5
+            duration: "5m"
+          - type: "error_burst"
+            probability: 0.01
+            error_rate: 0.5
+            duration: "2m"
+
+  # Shipping Receiver - Consumes from Kafka, calls Shipping Processor
+  - name: "shipping-receiver"
+    version: "1.1.0"
+    resource_attributes:
+      k8s.deployment.name: "shipping-receiver"
+      k8s.namespace.name: "ecommerce"
+    endpoints:
+      - name: "receive_shipment"
+        type: "messaging.consumer"
+        topic: "orders"
+        latency:
+          distribution: "normal"
+          p50_ms: 50
+          p95_ms: 150
+        calls:
+          - service: "shipping-processor"
+            endpoint: "create_shipment"
+
+  # Shipping Processor - Creates shipments
+  - name: "shipping-processor"
+    version: "1.0.5"
+    resource_attributes:
+      k8s.deployment.name: "shipping-processor"
+      k8s.namespace.name: "ecommerce"
+    endpoints:
+      - name: "create_shipment"
+        type: "http.server"
+        method: "POST"
+        route: "/api/shipments"
+        latency:
+          distribution: "normal"
+          p50_ms: 40
+          p95_ms: 120
+        errors:
+          rate: 0.02
+          types:
+            - code: 503
+              message: "Shipping provider unavailable"
+              weight: 1.0
+        calls:
+          - service: "postgres"
+            endpoint: "insert_shipment"
+
+  # PostgreSQL Database
+  - name: "postgres"
+    type: "database"
+    system: "postgresql"
+    version: "15.2"
+    connection:
+      host: "postgres.ecommerce.svc"
+      port: 5432
+      database: "ecommerce"
+    endpoints:
+      - name: "insert_order"
+        operation: "INSERT"
+        table: "orders"
+        latency:
+          p50_ms: 5
+          p95_ms: 25
+        errors:
+          rate: 0.005
+          types:
+            - code: 500
+              message: "Connection timeout"
+              exception: "org.postgresql.util.PSQLException"
+              weight: 1.0
+
+      - name: "select_orders"
+        operation: "SELECT"
+        table: "orders"
+        latency:
+          p50_ms: 8
+          p95_ms: 30
+
+      - name: "select_inventory"
+        operation: "SELECT"
+        table: "inventory"
+        latency:
+          p50_ms: 3
+          p95_ms: 15
+
+      - name: "update_inventory"
+        operation: "UPDATE"
+        table: "inventory"
+        latency:
+          p50_ms: 6
+          p95_ms: 20
+
+      - name: "update_order_status"
+        operation: "UPDATE"
+        table: "orders"
+        latency:
+          p50_ms: 5
+          p95_ms: 18
+
+      - name: "insert_shipment"
+        operation: "INSERT"
+        table: "shipments"
+        latency:
+          p50_ms: 5
+          p95_ms: 22
+
+  # Kafka Message Broker
+  - name: "kafka"
+    type: "messaging"
+    system: "kafka"
+    topics:
+      - name: "orders"
+        partitions: 6
+        producers:
+          - service: "orders"
+        consumers:
+          - service: "fulfillment"
+            consumer_group: "fulfillment-group"
+            lag:
+              min_ms: 50
+              max_ms: 500
+          - service: "shipping-receiver"
+            consumer_group: "shipping-group"
+            lag:
+              min_ms: 100
+              max_ms: 1000
+    endpoints:
+      - name: "publish_order"
+        type: "messaging.producer"
+        topic: "orders"
+        latency:
+          p50_ms: 2
+          p95_ms: 10
+
+logs:
+  enabled: true
+  patterns:
+    - service: "frontend"
+      level: "INFO"
+      rate_per_request: 2
+      messages:
+        - "Processing checkout request for user {user_id}"
+        - "Checkout completed successfully"
+
+    - service: "orders"
+      level: "INFO"
+      rate_per_request: 3
+      messages:
+        - "Creating order {order_id} for user {user_id}"
+        - "Order persisted to database"
+        - "Publishing order event to Kafka"
+
+    - service: "orders"
+      level: "ERROR"
+      on_error: true
+      messages:
+        - "Failed to create order: {exception.message}"
+        - "Database connection timeout after 30s"
+
+    - service: "fulfillment"
+      level: "INFO"
+      rate_per_request: 2
+      messages:
+        - "Processing order {order_id} from Kafka"
+        - "Fraud check passed for order {order_id}"
+
+    - service: "fulfillment"
+      level: "WARN"
+      rate_per_request: 0.1
+      messages:
+        - "High fraud score detected for order {order_id}"
+
+metrics:
+  enabled: true
+  export_interval: "60s"
+  http:
+    enabled: true
+    histograms:
+      - "http.server.request.duration"
+      - "http.client.request.duration"
+    counters:
+      - "http.server.request.count"
+  database:
+    enabled: true
+    histograms:
+      - "db.client.operation.duration"
+    counters:
+      - "db.client.connection.count"
+  custom:
+    - name: "orders.created"
+      type: "counter"
+      unit: "1"
+      attributes:
+        - "order.type"
+        - "customer.tier"
+    - name: "checkout.value"
+      type: "histogram"
+      unit: "USD"
+      buckets: [10, 50, 100, 500, 1000, 5000]
+
+scenarios:
+  - name: "business_hours"
+    schedule: "0 9-17 * * MON-FRI"
+    traffic_multiplier: 1.0
+
+  - name: "off_hours"
+    schedule: "0 0-8,18-23 * * *"
+    traffic_multiplier: 0.2
+
+  - name: "weekend"
+    schedule: "0 * * * SAT,SUN"
+    traffic_multiplier: 0.5
+
+  - name: "flash_sale"
+    schedule: "0 12 * * FRI"
+    traffic_multiplier: 5.0
+    anomalies:
+      - type: "latency_degradation"
+        services: ["postgres", "inventory"]
+        multiplier: 2.0
+        duration: "30m"
