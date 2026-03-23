@@ -54,13 +54,19 @@ func NewProvider(ctx context.Context, cfg *config.Config) (*Provider, error) {
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
+	// Determine if we need TLS
+	isHTTPS := strings.HasPrefix(cfg.Exporter.Endpoint, "https://")
+
 	// Create trace exporter
-	traceExporter, err := otlptracehttp.New(ctx,
+	traceOpts := []otlptracehttp.Option{
 		otlptracehttp.WithEndpoint(extractHost(endpoint)),
-		otlptracehttp.WithURLPath(extractPath(endpoint)+"/v1/traces"),
+		otlptracehttp.WithURLPath(extractPath(endpoint) + "/v1/traces"),
 		otlptracehttp.WithHeaders(headers),
-		otlptracehttp.WithInsecure(), // TODO: make configurable
-	)
+	}
+	if !isHTTPS {
+		traceOpts = append(traceOpts, otlptracehttp.WithInsecure())
+	}
+	traceExporter, err := otlptracehttp.New(ctx, traceOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
 	}
@@ -73,12 +79,15 @@ func NewProvider(ctx context.Context, cfg *config.Config) (*Provider, error) {
 	otel.SetTracerProvider(tp)
 
 	// Create metric exporter
-	metricExporter, err := otlpmetrichttp.New(ctx,
+	metricOpts := []otlpmetrichttp.Option{
 		otlpmetrichttp.WithEndpoint(extractHost(endpoint)),
-		otlpmetrichttp.WithURLPath(extractPath(endpoint)+"/v1/metrics"),
+		otlpmetrichttp.WithURLPath(extractPath(endpoint) + "/v1/metrics"),
 		otlpmetrichttp.WithHeaders(headers),
-		otlpmetrichttp.WithInsecure(), // TODO: make configurable
-	)
+	}
+	if !isHTTPS {
+		metricOpts = append(metricOpts, otlpmetrichttp.WithInsecure())
+	}
+	metricExporter, err := otlpmetrichttp.New(ctx, metricOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metric exporter: %w", err)
 	}
