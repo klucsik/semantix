@@ -138,7 +138,7 @@ See [configs/examples/ecommerce.yaml](configs/examples/ecommerce.yaml) for a com
 ┌─────────────────────────────────────────────────────────────┐
 │                      SEMANTIX ENGINE                        │
 ├─────────────────────────────────────────────────────────────┤
-│ Config Loader -> Service Registry -> Simulation Engine     │
+│ Config Loader -> Service Registry -> Simulation Engine      │
 │                                                             │
 │ ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐   │
 │ │ Traffic     │  │ Trace       │  │ Anomaly             │   │
