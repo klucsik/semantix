@@ -629,6 +629,8 @@ const dashboardHTML = `<!DOCTYPE html>
             position: relative;
             overflow: hidden;
             background: var(--bg-primary);
+            background-image: radial-gradient(circle, rgba(48, 54, 61, 0.4) 1px, transparent 1px);
+            background-size: 20px 20px;
         }
 
         #topology {
@@ -646,6 +648,12 @@ const dashboardHTML = `<!DOCTYPE html>
             stroke: var(--border);
             stroke-width: 1;
             rx: 6;
+            filter: drop-shadow(0 1px 3px rgba(0,0,0,0.3));
+        }
+
+        .node:hover .node-bg {
+            stroke: var(--accent-blue);
+            stroke-width: 1.5;
         }
 
         .node.selected .node-bg {
@@ -653,58 +661,72 @@ const dashboardHTML = `<!DOCTYPE html>
             stroke-width: 2;
         }
 
-        .node.http .node-accent { fill: var(--accent-blue); }
-        .node.database .node-accent { fill: var(--accent-purple); }
-        .node.messaging .node-accent { fill: var(--accent-orange); }
+        .node-accent {
+            rx: 3;
+        }
 
         .node-name {
             fill: var(--text-primary);
-            font-size: 12px;
-            font-weight: 500;
+            font-size: 11px;
+            font-weight: 600;
             font-family: var(--font-sans);
         }
 
-        .node-type {
+        .node-info {
             fill: var(--text-muted);
-            font-size: 10px;
+            font-size: 9px;
             font-family: var(--font-mono);
         }
 
-        .node-rpm {
-            fill: var(--text-secondary);
-            font-size: 10px;
+        .node-traffic {
+            fill: var(--accent-blue);
+            font-size: 9px;
+            font-weight: 600;
             font-family: var(--font-mono);
+        }
+
+        .node-type-badge {
+            fill: white;
+            font-size: 8px;
+            font-weight: 600;
+            font-family: var(--font-mono);
+        }
+
+        .node-type-bg {
+            rx: 3;
         }
 
         .node-anomaly {
             fill: var(--accent-red);
             font-size: 10px;
+            font-weight: 700;
         }
 
         /* Links */
         .link {
             fill: none;
+            stroke: rgba(100, 110, 130, 0.5);
+            stroke-width: 1.2;
             stroke-opacity: 0.5;
         }
 
-        .link.sync {
-            stroke: var(--accent-blue);
-            stroke-width: 1;
+        .link.async {
+            stroke-dasharray: 4, 3;
         }
 
-        .link.async {
-            stroke: var(--accent-orange);
-            stroke-width: 1;
-            stroke-dasharray: 4, 3;
+        .link.cross-type {
+            stroke: var(--accent-blue);
+            stroke-opacity: 0.4;
         }
 
         .link.highlighted {
             stroke-opacity: 0.9;
             stroke-width: 2;
+            stroke: var(--accent-blue);
         }
 
         .link.dimmed {
-            stroke-opacity: 0.15;
+            stroke-opacity: 0.1;
         }
 
         /* Detail Panel */
@@ -730,30 +752,6 @@ const dashboardHTML = `<!DOCTYPE html>
             font-size: 1.1rem;
             font-weight: 500;
             color: var(--text-primary);
-        }
-
-        .view-toggle {
-            display: flex;
-            gap: 2px;
-            background: var(--bg-glass);
-            border-radius: 4px;
-            padding: 2px;
-        }
-
-        .view-toggle button {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            font-size: 0.7rem;
-            padding: 4px 8px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-family: var(--font-sans);
-        }
-
-        .view-toggle button.active {
-            background: var(--accent-blue);
-            color: var(--bg-primary);
         }
 
         .jump-to-yaml-btn {
@@ -989,8 +987,8 @@ const dashboardHTML = `<!DOCTYPE html>
         .legend-line.dashed {
             background: repeating-linear-gradient(
                 90deg,
-                var(--accent-orange) 0px,
-                var(--accent-orange) 4px,
+                rgba(100, 110, 130, 0.5) 0px,
+                rgba(100, 110, 130, 0.5) 4px,
                 transparent 4px,
                 transparent 7px
             );
@@ -1039,6 +1037,7 @@ const dashboardHTML = `<!DOCTYPE html>
             display: flex;
             border-bottom: 1px solid var(--border);
             background: var(--bg-glass);
+            flex-shrink: 0;
         }
 
         .editor-tab {
@@ -1141,10 +1140,6 @@ const dashboardHTML = `<!DOCTYPE html>
 
         #editor-container .CodeMirror {
             height: 100%;
-        }
-
-        .editor-tabs {
-            flex-shrink: 0;
         }
 
         .editor-toolbar {
@@ -1304,7 +1299,7 @@ const dashboardHTML = `<!DOCTYPE html>
             <div class="legend">
                 <div class="legend-item">
                     <div class="legend-color" style="background: var(--accent-blue);"></div>
-                    <span>HTTP Service</span>
+                    <span>HTTP</span>
                 </div>
                 <div class="legend-item">
                     <div class="legend-color" style="background: var(--accent-purple);"></div>
@@ -1315,19 +1310,18 @@ const dashboardHTML = `<!DOCTYPE html>
                     <span>Messaging</span>
                 </div>
                 <div class="legend-item">
-                    <div class="legend-line" style="background: var(--accent-blue);"></div>
-                    <span>Sync Call</span>
+                    <div class="legend-line" style="background: rgba(100, 110, 130, 0.5);"></div>
+                    <span>Sync</span>
                 </div>
                 <div class="legend-item">
-                    <div class="legend-line dashed"></div>
-                    <span>Async Call</span>
+                    <div class="legend-line dashed" style="background: none; border-top: 2px dashed rgba(100, 110, 130, 0.5); height: 0;"></div>
+                    <span>Async</span>
                 </div>
             </div>
         </div>
 
         <div class="detail-panel" id="detail-panel">
             <div class="empty-state">
-                <div class="empty-state-icon"></div>
                 <div class="empty-state-title">Select a Service</div>
                 <div class="empty-state-text">Click on any service node to view detailed telemetry information and endpoint configuration.</div>
             </div>
@@ -1356,21 +1350,23 @@ const dashboardHTML = `<!DOCTYPE html>
         // Fetch topology data and render
         async function init() {
             try {
-                console.log('Initializing dashboard...');
                 const response = await fetch('/api/topology');
                 const data = await response.json();
-                console.log('Topology data:', data);
-                
+
                 // Update header stats
                 document.getElementById('total-services').textContent = data.stats.totalServices;
                 document.getElementById('total-rpm').textContent = formatNumber(data.stats.totalRpm);
                 document.getElementById('total-links').textContent = data.stats.totalLinks;
-                
+
                 renderTopology(data);
-                
-                // Auto-select frontend service on initial load
+
+                // Auto-select frontend service (visually + detail panel)
                 const frontend = data.nodes.find(n => n.name === 'frontend');
                 if (frontend) {
+                    d3.selectAll('.node').filter(d => d.id === frontend.id).classed('selected', true);
+                    d3.selectAll('.link')
+                        .classed('highlighted', l => l.source.id === frontend.id || l.target.id === frontend.id)
+                        .classed('dimmed', l => l.source.id !== frontend.id && l.target.id !== frontend.id);
                     showServiceDetail(frontend, data);
                 }
             } catch (error) {
@@ -1398,215 +1394,145 @@ const dashboardHTML = `<!DOCTYPE html>
         }
 
         function renderTopology(data) {
-            console.log('Rendering topology...');
             const svg = d3.select('#topology');
             const container = document.querySelector('.topology-container');
-            const width = container.clientWidth;
-            const height = container.clientHeight;
-            console.log('Container dimensions:', width, height);
-
-            svg.attr('width', width).attr('height', height);
-
-            // Clear previous content
+            const W = container.clientWidth;
+            const H = container.clientHeight;
+            svg.attr('width', W).attr('height', H);
             svg.selectAll('*').remove();
-
-            // Create definitions for arrows (smaller, fixed size)
-            const defs = svg.append('defs');
-            
-            defs.append('marker')
-                .attr('id', 'arrowhead-sync')
-                .attr('viewBox', '0 -3 6 6')
-                .attr('refX', 5)
-                .attr('refY', 0)
-                .attr('orient', 'auto')
-                .attr('markerWidth', 6)
-                .attr('markerHeight', 6)
-                .append('path')
-                .attr('d', 'M 0,-3 L 6,0 L 0,3')
-                .attr('fill', 'var(--accent-blue)');
-
-            defs.append('marker')
-                .attr('id', 'arrowhead-async')
-                .attr('viewBox', '0 -3 6 6')
-                .attr('refX', 5)
-                .attr('refY', 0)
-                .attr('orient', 'auto')
-                .attr('markerWidth', 6)
-                .attr('markerHeight', 6)
-                .append('path')
-                .attr('d', 'M 0,-3 L 6,0 L 0,3')
-                .attr('fill', 'var(--accent-orange)');
 
             const g = svg.append('g');
 
-            // --- Static Layout Algorithm ---
-            // Assign layers based on service type and dependencies
+            // Build node map and incoming edges
             const nodeMap = {};
             data.nodes.forEach(n => { nodeMap[n.id] = n; });
-            
-            // Build incoming edges map
             const incomingEdges = {};
-            const outgoingEdges = {};
-            data.nodes.forEach(n => { 
-                incomingEdges[n.id] = []; 
-                outgoingEdges[n.id] = [];
-            });
+            data.nodes.forEach(n => { incomingEdges[n.id] = []; });
             data.links.forEach(l => {
-                const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
-                const targetId = typeof l.target === 'object' ? l.target.id : l.target;
-                incomingEdges[targetId].push(sourceId);
-                outgoingEdges[sourceId].push(targetId);
+                const sid = typeof l.source === 'object' ? l.source.id : l.source;
+                const tid = typeof l.target === 'object' ? l.target.id : l.target;
+                if (incomingEdges[tid]) incomingEdges[tid].push(sid);
             });
-            
-            // Categorize services into layers
-            const layers = { 0: [], 1: [], 2: [], 3: [] };
+
+            // Categorize into layers
+            const layers = [[], [], [], []];
             data.nodes.forEach(n => {
-                if (n.type === 'database') {
-                    layers[3].push(n);
-                } else if (n.type === 'messaging') {
-                    layers[2].push(n);
-                } else if (incomingEdges[n.id].length === 0) {
-                    // Entry points (no incoming edges)
-                    layers[0].push(n);
-                } else {
-                    layers[1].push(n);
-                }
+                if (n.type === 'database') layers[3].push(n);
+                else if (n.type === 'messaging') layers[2].push(n);
+                else if (incomingEdges[n.id].length === 0) layers[0].push(n);
+                else layers[1].push(n);
             });
-            
-            // Calculate positions
-            const nodeWidth = 160;
-            const nodeHeight = 90;
-            const layerGap = 140;
-            const nodeGap = 30;
-            const padding = 80;
-            
-            // Position each layer
+
+            // Compact node dimensions
+            const nodeW = 150, nodeH = 55, gapH = 25, gapV = 70;
+            const padding = 60;
+
+            // Position each layer centered
+            const maxInLayer = Math.max(1, ...layers.map(l => l.length));
+            const maxLayerW = maxInLayer * nodeW + (maxInLayer - 1) * gapH;
             let currentY = padding;
-            for (let layer = 0; layer <= 3; layer++) {
-                const nodesInLayer = layers[layer];
-                if (nodesInLayer.length === 0) continue;
-                
-                const totalWidth = nodesInLayer.length * nodeWidth + (nodesInLayer.length - 1) * nodeGap;
-                let startX = (width - totalWidth) / 2;
-                
-                nodesInLayer.forEach((n, i) => {
-                    n.x = startX + i * (nodeWidth + nodeGap) + nodeWidth / 2;
-                    n.y = currentY + nodeHeight / 2;
+            for (let li = 0; li <= 3; li++) {
+                if (layers[li].length === 0) continue;
+                const lw = layers[li].length * nodeW + (layers[li].length - 1) * gapH;
+                const startX = padding + (maxLayerW - lw) / 2;
+                layers[li].forEach((n, i) => {
+                    n._x = startX + i * (nodeW + gapH) + nodeW / 2;
+                    n._y = currentY + nodeH / 2;
                 });
-                
-                currentY += nodeHeight + layerGap;
+                currentY += nodeH + gapV;
             }
 
-            // Create link data with resolved source/target
-            const linkData = data.links.map(l => ({
-                source: nodeMap[typeof l.source === 'object' ? l.source.id : l.source],
-                target: nodeMap[typeof l.target === 'object' ? l.target.id : l.target],
-                type: l.type,
-                endpoint: l.endpoint,
-                rpm: l.rpm
-            }));
+            // Type colors (semantix dark theme palette)
+            const typeColors = { http: '#58a6ff', database: '#bc8cff', messaging: '#d29922' };
 
-            // Create nodes FIRST (so links render on top)
-            const node = g.append('g')
-                .attr('class', 'nodes-layer')
-                .selectAll('g')
-                .data(data.nodes)
-                .join('g')
-                .attr('class', d => 'node ' + d.type)
-                .attr('transform', d => 'translate(' + d.x + ',' + d.y + ')');
+            // Arrow marker
+            svg.append('defs').append('marker')
+                .attr('id', 'arrow').attr('viewBox', '0 -3 6 6').attr('refX', 5).attr('refY', 0)
+                .attr('markerWidth', 6).attr('markerHeight', 6).attr('orient', 'auto')
+                .append('path').attr('d', 'M0,-3L6,0L0,3').attr('fill', '#556');
+
+            // Build link data with cross-type detection
+            const linkData = data.links.map(l => {
+                const src = nodeMap[typeof l.source === 'object' ? l.source.id : l.source];
+                const tgt = nodeMap[typeof l.target === 'object' ? l.target.id : l.target];
+                return { source: src, target: tgt, type: l.type, crossType: src && tgt && src.type !== tgt.type };
+            });
+
+            // Draw links first (behind nodes in SVG stacking order)
+            const link = g.selectAll('.link').data(linkData).join('path')
+                .attr('class', d => 'link' + (d.type === 'async' ? ' async' : '') + (d.crossType ? ' cross-type' : ''))
+                .attr('marker-end', 'url(#arrow)')
+                .attr('d', d => {
+                    if (!d.source?._x || !d.target?._x) return '';
+                    const sy = d.source._y + nodeH / 2, ty = d.target._y - nodeH / 2;
+                    const midY = (sy + ty) / 2;
+                    return 'M ' + d.source._x + ' ' + sy + ' C ' + d.source._x + ' ' + midY + ', ' + d.target._x + ' ' + midY + ', ' + d.target._x + ' ' + ty;
+                });
+
+            // Draw nodes on top
+            const nodes = g.selectAll('.node').data(data.nodes).join('g')
+                .attr('class', 'node')
+                .attr('transform', d => 'translate(' + d._x + ',' + d._y + ')');
 
             // Node background
-            node.append('rect')
-                .attr('class', 'node-bg')
-                .attr('width', 140)
-                .attr('height', 80)
-                .attr('x', -70)
-                .attr('y', -40);
+            nodes.append('rect').attr('class', 'node-bg')
+                .attr('x', -nodeW / 2).attr('y', -nodeH / 2).attr('width', nodeW).attr('height', nodeH);
 
-            // Accent bar (shortened to avoid overlapping rounded corners)
-            node.append('rect')
-                .attr('class', 'node-accent')
-                .attr('width', 4)
-                .attr('height', 68)
-                .attr('x', -70)
-                .attr('y', -34)
-                .attr('rx', 2);
+            // Accent bar (left edge, colored by service type)
+            nodes.append('rect').attr('class', 'node-accent')
+                .attr('x', -nodeW / 2).attr('y', -nodeH / 2).attr('width', 4).attr('height', nodeH)
+                .style('fill', d => typeColors[d.type] || '#58a6ff');
+
+            // Type badge background
+            nodes.append('rect').attr('class', 'node-type-bg')
+                .attr('x', nodeW / 2 - 40).attr('y', -nodeH / 2 + 4).attr('width', 36).attr('height', 14)
+                .style('fill', d => typeColors[d.type] || '#58a6ff');
+
+            // Type badge text
+            nodes.append('text').attr('class', 'node-type-badge')
+                .attr('x', nodeW / 2 - 22).attr('y', -nodeH / 2 + 14).attr('text-anchor', 'middle')
+                .text(d => (d.type || '').toUpperCase().slice(0, 5));
 
             // Service name
-            node.append('text')
-                .attr('class', 'node-name')
-                .attr('x', -58)
-                .attr('y', -15)
-                .text(d => d.name);
+            nodes.append('text').attr('class', 'node-name')
+                .attr('x', -nodeW / 2 + 10).attr('y', -2)
+                .text(d => d.name.length > 18 ? d.name.slice(0, 16) + '..' : d.name);
 
-            // Service type
-            node.append('text')
-                .attr('class', 'node-type')
-                .attr('x', -58)
-                .attr('y', 0)
+            // Info line (system or type)
+            nodes.append('text').attr('class', 'node-info')
+                .attr('x', -nodeW / 2 + 10).attr('y', 12)
                 .text(d => d.system || d.type);
 
-            // RPM badge
-            node.append('text')
-                .attr('class', 'node-rpm')
-                .attr('x', -58)
-                .attr('y', 20)
+            // Traffic badge (RPM)
+            nodes.append('text').attr('class', 'node-traffic')
+                .attr('x', -nodeW / 2 + 10).attr('y', nodeH / 2 - 6)
                 .text(d => d.totalRpm > 0 ? formatNumber(d.totalRpm) + ' rpm' : '');
 
             // Anomaly indicator
-            node.filter(d => d.hasAnomalies)
-                .append('text')
-                .attr('class', 'node-anomaly')
-                .attr('x', 50)
-                .attr('y', -25)
+            nodes.filter(d => d.hasAnomalies)
+                .append('text').attr('class', 'node-anomaly')
+                .attr('x', nodeW / 2 - 8).attr('y', nodeH / 2 - 6)
                 .text('!');
 
-            // Create links AFTER nodes (curved paths that connect to node edges)
-            const link = g.append('g')
-                .attr('class', 'links-layer')
-                .selectAll('path')
-                .data(linkData)
-                .join('path')
-                .attr('class', d => 'link ' + d.type)
-                .attr('marker-end', d => 'url(#arrowhead-' + d.type + ')')
-                .attr('d', d => {
-                    const sx = d.source.x;
-                    const sy = d.source.y + 40;  // Bottom of source node
-                    const tx = d.target.x;
-                    const ty = d.target.y - 40;  // Top of target node
-                    // Curved path
-                    const midY = (sy + ty) / 2;
-                    return 'M ' + sx + ' ' + sy + ' C ' + sx + ' ' + midY + ', ' + tx + ' ' + midY + ', ' + tx + ' ' + ty;
-                });
-
-            // Click handler for nodes
-            node.on('click', function(event, d) {
+            // Click handler
+            nodes.on('click', function(event, d) {
                 event.stopPropagation();
-                
-                // Deselect previous
                 d3.selectAll('.node').classed('selected', false);
                 d3.selectAll('.link').classed('highlighted', false).classed('dimmed', false);
-                
-                // Select new
                 d3.select(this).classed('selected', true);
-                
-                // Highlight connected links
                 link.classed('highlighted', l => l.source.id === d.id || l.target.id === d.id);
                 link.classed('dimmed', l => l.source.id !== d.id && l.target.id !== d.id);
-                
                 showServiceDetail(d, data);
             });
-            
-            // Center the diagram
+
+            // Auto-fit and center
             const bounds = g.node().getBBox();
-            const scale = Math.min(
-                (width - 40) / bounds.width,
-                (height - 40) / bounds.height,
-                1
-            );
-            const translateX = (width - bounds.width * scale) / 2 - bounds.x * scale;
-            const translateY = (height - bounds.height * scale) / 2 - bounds.y * scale;
-            g.attr('transform', 'translate(' + translateX + ',' + translateY + ') scale(' + scale + ')');
+            if (bounds.width > 0 && bounds.height > 0) {
+                const scale = Math.min((W - 30) / bounds.width, (H - 30) / bounds.height, 1.3);
+                const tx = (W - bounds.width * scale) / 2 - bounds.x * scale;
+                const ty = (H - bounds.height * scale) / 2 - bounds.y * scale;
+                g.attr('transform', 'translate(' + tx + ',' + ty + ') scale(' + scale + ')');
+            }
         }
 
         function showEmptyState() {
@@ -1691,7 +1617,7 @@ const dashboardHTML = `<!DOCTYPE html>
                         ${routeLabel ? ` + "`" + `<div class="endpoint-route">${routeLabel}</div>` + "`" + ` : ''}
                         <div class="endpoint-metrics">
                             <div class="endpoint-metric">
-                                <div class="endpoint-metric-value" style="color: var(--accent-cyan);">${formatNumber(ep.rpm)}</div>
+                                <div class="endpoint-metric-value" style="color: var(--accent-green);">${formatNumber(ep.rpm)}</div>
                                 <div class="endpoint-metric-label">RPM</div>
                             </div>
                             <div class="endpoint-metric">
